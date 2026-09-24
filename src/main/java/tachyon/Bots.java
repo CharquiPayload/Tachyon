@@ -74,7 +74,7 @@ import java.util.stream.Collectors;
  * {@code /tachyon stats} says what that costs, next to {@code /tick query}.
  *
  * <pre>
- *   /tachyon spawn &lt;name&gt; [count]   a bot where you stand; with a count,
+ *   /tachyon spawn &lt;name&gt; [count]   a bot where you stand; with a count over 1,
  *                                          that many: name1, name2...
  *   /tachyon goto &lt;who&gt; &lt;x y z&gt;     walks there
  *   /tachyon follow &lt;who&gt; &lt;player&gt;  walks after them
@@ -187,6 +187,8 @@ public final class Bots {
         Brain brain;
         /** Its last search found no way at all. */
         boolean searchFailed;
+        /** Who gave the order it carries out, to be told when it is over (null: nobody to tell). */
+        Order order;
 
         Bot(BotPlayer body) {
             this.body = body;
@@ -195,6 +197,23 @@ public final class Bots {
         String name() {
             return body.getGameProfile().getName();
         }
+    }
+
+    /**
+     * Who gave an order: told how it went once it is over by itself (done, or given up).
+     * Spoken (in the chat): its brain tells them, in its words; else a line to them.
+     */
+    record Order(UUID who, String name, boolean spoken) {
+    }
+
+    /**
+     * A command's order, to be told back: only to one bot. A crowd's reports would flood
+     * whoever gave it; theirs are in {@code list}.
+     */
+    private static Order order(CommandSourceStack s, List<Bot> them) {
+        if (them.size() != 1) return null;
+        ServerPlayer pl = s.getPlayer();
+        return new Order(pl == null ? null : pl.getUUID(), s.getTextName(), false);
     }
 
     private static final class Stats {
@@ -310,11 +329,11 @@ public final class Bots {
 
     private static final String WHO = "who";
 
-    /** @param count 0: one bot, named {@code name}; else that many, name1 to nameN */
+    /** @param count 0 or 1: one bot, named {@code name}; else that many, name1 to nameN */
     private static int spawn(CommandContext<CommandSourceStack> c, int count) {
         CommandSourceStack source = c.getSource();
         String name = StringArgumentType.getString(c, "name");
-        if (count == 0) {
+        if (count <= 1) {
             if (!spawn(source, name)) return 0;
             return say(source, "bot " + name + " is in, at " + ALL.get(key(name)).body.blockPosition().toShortString());
         }
@@ -415,7 +434,8 @@ public final class Bots {
     private static int goTo(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
         List<Bot> them = find(c);
         BlockPos to = BlockPosArgument.getBlockPos(c, "pos");
-        for (Bot p : them) orderGoto(p, to);
+        Order by = order(c.getSource(), them);
+        for (Bot p : them) orderGoto(p, to, by);
         return told(c, them, "searching a way to " + to.toShortString());
     }
 
@@ -424,7 +444,8 @@ public final class Bots {
         String name = leader.getGameProfile().getName();
         // A bot the pattern also takes in does not follow itself.
         List<Bot> them = find(c).stream().filter(p -> p.body != leader).toList();
-        for (Bot p : them) orderFollow(p, leader);
+        Order by = order(c.getSource(), them);
+        for (Bot p : them) orderFollow(p, leader, by);
         return told(c, them, "following " + name);
     }
 
@@ -434,7 +455,8 @@ public final class Bots {
         Holder.Reference<EntityType<?>> mob = ResourceArgument.getEntityType(c, "mob");
         String name = mob.key().location().getPath();
         if (mob.value() == EntityType.PLAYER) return fail(c.getSource(), "players are never prey");
-        for (Bot p : them) orderHunt(p, mob.value(), name, count);
+        Order by = order(c.getSource(), them);
+        for (Bot p : them) orderHunt(p, mob.value(), name, count, by);
         return told(c, them, "hunting " + name + (count > 0 ? ", " + count + " each" : ", every one around"));
     }
 
@@ -444,7 +466,8 @@ public final class Bots {
         String refused = tooBig(a, b);
         if (refused != null) return fail(c.getSource(), refused);
         Clear.Area area = new Clear.Area(c.getSource().getLevel(), a, b);
-        for (Bot p : them) clearWith(p, area);
+        Order by = order(c.getSource(), them);
+        for (Bot p : them) clearWith(p, area, by);
         return told(c, them, "clearing " + area.box() + " (" + volume(a, b) + " blocks)");
     }
 
@@ -467,16 +490,21 @@ public final class Bots {
 
     // --- orders: from the commands and from the brain's tools -----------------------------
 
-    static void orderGoto(Bot p, BlockPos to) {
+    // Each order replaces the last, which then is not over by itself: nobody is told.
+    // {@code by}: who is told when this one is (null: nobody).
+
+    static void orderGoto(Bot p, BlockPos to, Order by) {
         endJob(p);
+        p.order = by;
         p.following = null;
         p.target = to;
         p.replans = 0;
         plan(p, to, "going to " + to.toShortString());
     }
 
-    static void orderFollow(Bot p, ServerPlayer leader) {
+    static void orderFollow(Bot p, ServerPlayer leader, Order by) {
         endJob(p);
+        p.order = by;
         p.following = leader;
         p.target = null;
         p.plannedAt = -REPLAN_TICKS;
@@ -486,13 +514,15 @@ public final class Bots {
 
     static void orderStop(Bot p) {
         endJob(p);
+        p.order = null;
         p.following = null;
         p.target = null;
         halt(p, "standing");
     }
 
-    static void orderHunt(Bot p, EntityType<?> prey, String name, int count) {
+    static void orderHunt(Bot p, EntityType<?> prey, String name, int count, Order by) {
         endJob(p);
+        p.order = by;
         p.following = null;
         p.target = null;
         halt(p, "hunting " + name);
@@ -500,15 +530,16 @@ public final class Bots {
     }
 
     /** @return why not (a box too big), or null once the order is given */
-    static String orderClear(Bot p, BlockPos a, BlockPos b) {
+    static String orderClear(Bot p, BlockPos a, BlockPos b, Order by) {
         String refused = tooBig(a, b);
         if (refused != null) return refused;
-        clearWith(p, new Clear.Area(p.body.serverLevel(), a, b));
+        clearWith(p, new Clear.Area(p.body.serverLevel(), a, b), by);
         return null;
     }
 
-    private static void clearWith(Bot p, Clear.Area area) {
+    private static void clearWith(Bot p, Clear.Area area, Order by) {
         endJob(p);
+        p.order = by;
         p.following = null;
         p.target = null;
         halt(p, "clearing " + area.box());
@@ -719,13 +750,33 @@ public final class Bots {
         if (!p.body.isAlive()) return;
         long now = p.body.getServer().getTickCount();
         follow(p, now);
-        if (p.job != null && !p.job.think(p, now)) endJob(p);
+        if (p.job != null && !p.job.think(p, now)) {
+            endJob(p);
+            finished(p);
+        }
         adopt(p);
         steer(p);
         if (p.job != null) {
             p.job.act(p);
             p.doing = p.job.status();
         }
+    }
+
+    /**
+     * Its order, over by itself (done, or given up), in {@code doing}: whoever gave it is
+     * told, once. Said in the chat, its brain tells them in its words.
+     */
+    static void finished(Bot p) {
+        Order o = p.order;
+        p.order = null;
+        if (o == null) return;
+        LOG.info("[tachyon] {} is over: {}", p.name(), p.doing);
+        if (o.spoken()) {
+            brain(p).over(o.who(), o.name(), p.doing);
+            return;
+        }
+        ServerPlayer pl = o.who() == null ? null : p.body.getServer().getPlayerList().getPlayer(o.who());
+        if (pl != null) pl.sendSystemMessage(Component.literal("[tachyon] " + p.name() + ": " + p.doing));
     }
 
     /** Its job, over: what its hands held is let go. */
@@ -798,6 +849,7 @@ public final class Bots {
         if (leader.isRemoved() || leader.level() != p.body.level()) {
             p.following = null;
             halt(p, "lost " + leader.getGameProfile().getName());
+            finished(p);
             return;
         }
         if (now - p.plannedAt < REPLAN_TICKS || p.pending != null) return;
@@ -874,14 +926,18 @@ public final class Bots {
                 String t = p.target.toShortString();
                 p.target = null;
                 halt(p, "arrived at " + t);
+                finished(p);
             } else if (p.path != null) {
                 halt(p, p.doing);             // a follower already beside whom it follows
             }
             return;
         }
         if (r == null || !r.hasRoute()) {
+            // A goto's search, over; a job's or a follower's, theirs to try again.
+            boolean going = p.target != null;
             p.target = null;
             halt(p, "no way: " + (r == null ? "the search failed" : r.reason()));
+            if (going) finished(p);
             return;
         }
         p.path = r.steps();
@@ -947,6 +1003,7 @@ public final class Bots {
                 BlockPos t = p.target;
                 p.target = null;
                 halt(p, String.format(Locale.ROOT, "arrived at %s (%.1f from it)", t.toShortString(), missing));
+                finished(p);
             } else {
                 halt(p, p.following != null ? "following " + p.following.getGameProfile().getName() : "standing");
             }
@@ -954,8 +1011,10 @@ public final class Bots {
         }
 
         if (++p.ticks > TICKS_MAX) {
+            boolean going = p.target != null;
             p.target = null;
             halt(p, "ran out of time at " + b.blockPosition().toShortString());
+            if (going) finished(p);
             return;
         }
 
@@ -998,8 +1057,10 @@ public final class Bots {
             return true;
         }
         if (p.target == null || ++p.replans > REPLANS_MAX) {
+            boolean going = p.target != null;
             p.target = null;
             halt(p, "stuck at " + p.body.blockPosition().toShortString());
+            if (going) finished(p);
             return false;
         }
         plan(p, p.target, "going to " + p.target.toShortString() + " (searching again: stuck)");

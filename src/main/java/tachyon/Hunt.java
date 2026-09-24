@@ -115,8 +115,9 @@ final class Hunt extends Job {
             lookedAt = now;
             target = choose(p);
             if (target == null) {
-                Bots.halt(p, "no " + preyName + " left within " + (int) RADIUS
-                        + (killed > 0 ? "; hunted " + killed : ""));
+                // How many it killed, said even when none: the words go to its brain.
+                Bots.halt(p, "no " + preyName + " left within " + (int) RADIUS + "; "
+                        + killed + (wanted > 0 ? " of " + wanted : "") + " killed by it");
                 return false;
             }
             fails = 0;

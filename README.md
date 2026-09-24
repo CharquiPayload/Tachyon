@@ -26,7 +26,7 @@ what a player does is still to come.
 
 | command | who | what |
 |---|---|---|
-| `/tachyon spawn <name> [count]` | operators | a bot where you stand; with a count, that many (`name1`, `name2`...), each on a tile of its own |
+| `/tachyon spawn <name> [count]` | operators | a bot where you stand; with a count over 1, that many (`name1`, `name2`...), each on a tile of its own |
 | `/tachyon remove <who>` | owner, operators | the bot leaves |
 | `/tachyon goto <who> <x y z>` | owner, operators | walks there |
 | `/tachyon follow <who> <player>` | owner, operators | walks after them until stopped |
@@ -43,6 +43,10 @@ what a player does is still to come.
 (`*` is every bot, `Miner*` every one whose name starts so), or a selector
 (`@a[distance=..10]`).
 
+An order given to one bot is told back when it is over (done, or given up): a line
+to whoever gave it. Orders to many bots are not, or the chat would flood; `list`
+shows how each goes.
+
 **Who can do what.** Operators give orders to every bot. Any other player gives
 orders to the bots that are theirs: whoever brought a bot in owns it, and an
 operator can hand it to someone else with `owner`. Only operators bring bots in,
@@ -55,7 +59,8 @@ for.
 Name it in the chat: `Ada, come here`, `Ada hunt three cows`, `what do you see,
 Ada?`. It answers in the chat, in the language it was spoken to in, and does what
 it can with its tools: come to you, follow, go somewhere, stop, hunt, clear a
-box, tell how it is, look around. Each player can speak to bots a few times a
+box, tell how it is, look around. When something it was asked is over (done, or
+given up), it says so, in its words. Each player can speak to bots a few times a
 minute (`per_minute`).
 
 ## The brain

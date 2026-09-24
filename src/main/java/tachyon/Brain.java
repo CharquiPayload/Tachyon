@@ -38,6 +38,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>The model is asked on a thread of its own, never on the server's: a slow model is a
  * slow answer, not a slow server. The tools run on the server's thread, where the world
  * is. One thing at a time: what is said while it thinks waits, the last of it.
+ *
+ * <p>An order given in the chat that is over by itself (done, or given up) is news: the
+ * brain is told, with no tools, and says how it went to whoever gave it.
  */
 final class Brain {
 
@@ -65,10 +68,16 @@ final class Brain {
         config = BrainConfig.load();
     }
 
-    private record Said(UUID who, String name, String text) {
+    /** Said to it; or, {@code news}, what came of an order {@code who} gave it. */
+    private record Said(UUID who, String name, String text, boolean news) {
     }
 
-    private record Turn(String heard, String answered) {
+    /**
+     * A turn as it went: what it heard (without the state, which is old news by then),
+     * then its answers, tool calls and their results. The calls stay: a history of words
+     * alone teaches the model that answering "on it" is doing it.
+     */
+    private record Turn(List<JsonObject> messages) {
     }
 
     private final Bots.Bot p;
@@ -92,12 +101,23 @@ final class Brain {
             tell(who, p.name() + " has no brain set up (tachyon.properties: url)");
             return;
         }
+        Said said = new Said(who, name, text, false);
         if (busy()) {
-            waiting = new Said(who, name, text);        // the last thing said, after this one
+            waiting = said;         // the last thing said, after this one
             return;
         }
-        Said said = new Said(who, name, text);
         thinking = THINK.submit(() -> think(said));
+    }
+
+    /** An order {@code who} gave it, over by itself: {@code how} it went. On the server's thread. */
+    void over(UUID who, String name, String how) {
+        if (config().url(p.name()).isEmpty()) return;
+        Said news = new Said(who, name, how, true);
+        if (busy()) {
+            if (waiting == null) waiting = news;        // never instead of what a player said
+            return;
+        }
+        thinking = THINK.submit(() -> think(news));
     }
 
     void stop() {
@@ -114,21 +134,27 @@ final class Brain {
         try {
             List<JsonObject> msgs = new ArrayList<>();
             msgs.add(message("system", prompt()));
-            for (Turn t : history) {
-                msgs.add(message("user", t.heard()));
-                msgs.add(message("assistant", t.answered()));
-            }
+            for (Turn t : history) msgs.addAll(t.messages());
             String state = onServer(() -> state(said));
-            String heard = said.name() + ": " + said.text();
+            String heard = said.news()
+                    ? "(Nobody spoke: news. What " + said.name() + " asked you to do is over: " + said.text()
+                            + ". Tell them how it went, in one short sentence, in the language they write to you in:"
+                            + " only what this says happened, nothing more.)"
+                    : said.name() + ": " + said.text();
             msgs.add(message("user", "[" + state + "]\n" + heard));
+            int from = msgs.size();
 
             String answer = "";
-            int steps = cfg.steps();
+            // News is only told: no tools, so the first answer is words.
+            int steps = said.news() ? 0 : cfg.steps();
             for (int step = 0; ; step++) {
                 // The last step has no tools: whatever was done, it answers in words.
                 Llm.Reply r = llm.ask(msgs, step < steps ? TOOLS : new JsonArray());
                 msgs.add(r.message());
                 if (r.calls().isEmpty() || step >= steps) {
+                    // Calls asked for with no tools offered are not run: kept, they would
+                    // be calls with no results in the history, which APIs refuse.
+                    if (!r.calls().isEmpty()) msgs.set(msgs.size() - 1, message("assistant", r.text()));
                     answer = r.text().strip();
                     break;
                 }
@@ -144,7 +170,10 @@ final class Brain {
             }
             String said2 = answer;
             server.execute(() -> say(said2));
-            history.addLast(new Turn(heard, answer.isEmpty() ? "(did it)" : answer));
+            List<JsonObject> turn = new ArrayList<>();
+            turn.add(message("user", heard));
+            turn.addAll(msgs.subList(from, msgs.size()));
+            history.addLast(new Turn(turn));
             while (history.size() > HISTORY) history.removeFirst();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -157,11 +186,16 @@ final class Brain {
         }
     }
 
-    /** What was said while it thought, now. */
+    /**
+     * What was said while it thought, now: started here and not through hear, since the
+     * turn that ran this may not count as done yet, and it would wait for nothing.
+     */
     private void next() {
         Said w = waiting;
         waiting = null;
-        if (w != null && p.body.isAlive() && !p.body.isRemoved()) hear(w.who(), w.name(), w.text());
+        if (w != null && p.body.isAlive() && !p.body.isRemoved() && !config().url(p.name()).isEmpty()) {
+            thinking = THINK.submit(() -> think(w));
+        }
     }
 
     private <T> T onServer(java.util.function.Supplier<T> work) throws Exception {
@@ -264,7 +298,7 @@ final class Brain {
             switch (call.name()) {
                 case "come_here" -> {
                     if (speaker == null) return "nobody to go to: the one speaking is not in the game";
-                    Bots.orderGoto(p, speaker.blockPosition());
+                    Bots.orderGoto(p, speaker.blockPosition(), by(said));
                     return "started walking to " + said.name() + ", " + Math.round(speaker.distanceTo(b))
                             + " blocks away; not there yet";
                 }
@@ -273,12 +307,12 @@ final class Brain {
                     ServerPlayer leader = server.getPlayerList().getPlayerByName(who);
                     if (leader == null) return "no player " + who + " in the game";
                     if (leader == b) return "you cannot follow yourself";
-                    Bots.orderFollow(p, leader);
+                    Bots.orderFollow(p, leader, by(said));
                     return "following " + who;
                 }
                 case "go_to" -> {
                     BlockPos to = new BlockPos(a.get("x").getAsInt(), a.get("y").getAsInt(), a.get("z").getAsInt());
-                    Bots.orderGoto(p, to);
+                    Bots.orderGoto(p, to, by(said));
                     return "started walking to " + pos(to) + ", " + Math.round(Math.sqrt(to.distToCenterSqr(b.position())))
                             + " blocks away; not there yet";
                 }
@@ -293,7 +327,7 @@ final class Brain {
                     if (type == null) return "there is no mob called " + mob;
                     if (type == EntityType.PLAYER) return "you never hunt players";
                     int count = a.has("count") ? Math.max(0, a.get("count").getAsInt()) : 0;
-                    Bots.orderHunt(p, type, id.getPath(), count);
+                    Bots.orderHunt(p, type, id.getPath(), count, by(said));
                     return "started hunting " + id.getPath() + (count > 0 ? ", " + count : ", every one around") + ", "
                             + (Hunt.damage(b.getMainHandItem()) > 0 ? "with " + item(b.getMainHandItem()) : "bare-handed (no weapon)")
                             + "; none killed yet, it takes a while";
@@ -301,7 +335,7 @@ final class Brain {
                 case "clear" -> {
                     BlockPos c1 = new BlockPos(a.get("x1").getAsInt(), a.get("y1").getAsInt(), a.get("z1").getAsInt());
                     BlockPos c2 = new BlockPos(a.get("x2").getAsInt(), a.get("y2").getAsInt(), a.get("z2").getAsInt());
-                    String refused = Bots.orderClear(p, c1, c2);
+                    String refused = Bots.orderClear(p, c1, c2, by(said));
                     return refused != null ? refused : "started clearing " + pos(c1) + " to " + pos(c2)
                             + "; nothing broken yet, it takes a while";
                 }
@@ -319,6 +353,11 @@ final class Brain {
         } catch (RuntimeException e) {
             return "that could not be done: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
         }
+    }
+
+    /** An order from the chat: its brain tells how it went (from the console: nobody to tell). */
+    private static Bots.Order by(Said said) {
+        return said.who() == null ? null : new Bots.Order(said.who(), said.name(), true);
     }
 
     private static String around(BotPlayer b) {
