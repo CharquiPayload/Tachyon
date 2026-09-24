@@ -1,0 +1,51 @@
+plugins {
+    id 'java'
+    id 'net.neoforged.moddev' version '2.0.78'
+}
+
+version = '0.1.0'
+group = 'tachyon'
+base { archivesName = 'tachyon' }
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+neoForge {
+    version = '21.1.248'
+
+    // A dedicated server to try the bots on: ./gradlew runServer, in run/.
+    runs {
+        server {
+            server()
+            gameDirectory = project.file('run')
+            programArgument '--nogui'
+        }
+    }
+
+    mods {
+        tachyon {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+repositories { mavenCentral() }
+
+dependencies {
+    testImplementation platform('org.junit:junit-bom:5.11.3')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+        exceptionFormat 'full'
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}

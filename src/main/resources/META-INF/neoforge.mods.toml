@@ -1,0 +1,27 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "MIT"
+
+# A server-side mod: it goes in a dedicated server's mods folder, and players join
+# without it. On a client it is never constructed (@Mod(dist = DEDICATED_SERVER)).
+
+[[mods]]
+modId = "tachyon"
+version = "0.1.0"
+displayName = "Tachyon"
+description = '''Bots that live on the server: players nobody plays, with a player's body and physics, hands that hunt and break blocks, and a brain behind an AI API (OpenAI-style, Anthropic, or a local Ollama).'''
+authors = "CharquiPayload"
+
+[[mods.dependencies.tachyon]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1.0,)"
+ordering = "NONE"
+side = "SERVER"
+
+[[mods.dependencies.tachyon]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,1.22)"
+ordering = "NONE"
+side = "SERVER"

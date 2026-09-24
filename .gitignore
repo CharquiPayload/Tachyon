@@ -1,0 +1,16 @@
+# Gradle and the builds
+.gradle/
+build/
+out/
+
+# The dev server (./gradlew runServer): its world, its logs and its tachyon.properties
+run/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+bin/
