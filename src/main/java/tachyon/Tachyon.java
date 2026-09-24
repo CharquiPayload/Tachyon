@@ -16,5 +16,7 @@ public final class Tachyon {
 
     public Tachyon() {
         NeoForge.EVENT_BUS.register(new Bots());
+        // The abilities' own handlers of the game's events, if they have any.
+        Abilities.events(NeoForge.EVENT_BUS);
     }
 }

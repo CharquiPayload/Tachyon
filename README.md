@@ -34,6 +34,8 @@ what a player does is still to come.
 | `/tachyon hunt <who> <mob> [count]` | owner, operators | kills that many of a mob each (every one around without a count) and picks up the drops |
 | `/tachyon clear <who> <from> <to>` | owner, operators | breaks every block in the box, top layer first, with the right tools |
 | `/tachyon tell <who> <words>` | owner, operators | says something to a bot, as if in the chat |
+| `/tachyon settings <who>` | owner, operators | its [settings](#settings): each one's value, and whether it is its own or the server's default |
+| `/tachyon set <who> <key> <value>` | owner, operators (some settings: operators only) | changes one of its settings; `default` as the value goes back to the server's default |
 | `/tachyon owner <who> [player]` | operators | whose it is, or give it to someone |
 | `/tachyon list` | anyone | your bots (every bot, for operators) and what each is doing |
 | `/tachyon brain [reload]` | operators | how the bots think, or read `tachyon.properties` again |
@@ -49,10 +51,11 @@ shows how each goes.
 
 **Who can do what.** Operators give orders to every bot. Any other player gives
 orders to the bots that are theirs: whoever brought a bot in owns it, and an
-operator can hand it to someone else with `owner`. Only operators bring bots in,
-since every bot costs the server something. **In the chat, a bot listens only to
-its owner**, not even to operators: every answer is a call to a model someone pays
-for.
+operator can hand it to someone else with `owner`. A bot remembers whose it is:
+brought in again from the console, it is still its last owner's. Only operators
+bring bots in, since every bot costs the server something. **In the chat, a bot
+listens only to its owner**, not even to operators: every answer is a call to a
+model someone pays for.
 
 ## Talking to a bot
 
@@ -62,6 +65,31 @@ it can with its tools: come to you, follow, go somewhere, stop, hunt, clear a
 box, tell how it is, look around. When something it was asked is over (done, or
 given up), it says so, in its words. Each player can speak to bots a few times a
 minute (`per_minute`).
+
+## Settings
+
+Settings are switches and numbers that say how a bot goes about what it does.
+`/tachyon settings <who>` lists them, each with its value and where that comes
+from; `/tachyon set <who> <key> <value>` changes one. For now there is one:
+
+| key | default | what |
+|---|---|---|
+| `sprint` | `true` | whether it may sprint when walking |
+
+A setting has two layers:
+
+- **The server's default**, for every bot that has no value of its own:
+  `default.<key>=...` in `tachyon.properties` (`default.sprint=false`), or else
+  the default in the table. After editing the file, `/tachyon brain reload`.
+- **The bot's own value**, set with `/tachyon set`. It is kept with the world,
+  in `<world>/tachyon/bots/<name in lower case>.json`, so it stays when the bot
+  leaves and comes back. `/tachyon set <who> <key> default` clears it, and the
+  server's default applies again.
+
+A bot's owner and operators may change its settings; a few may be only the
+operators' (the list says which). A switch takes `true` or `false` (or `on`,
+`off`, `yes`, `no`); a number, plain digits within its range, and one out of it
+is refused with the range.
 
 ## The brain
 
@@ -122,6 +150,8 @@ untrusted input to the model, and every answer costs whoever owns the key.
 ./gradlew build       # build/libs/tachyon-<version>.jar, and the tests
 ./gradlew runServer   # a dedicated server to try it on, in run/
 ```
+
+To teach the bots something new, see [Adding an ability](docs/adding-an-ability.md).
 
 ## Acknowledgements
 

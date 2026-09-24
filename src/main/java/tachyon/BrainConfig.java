@@ -19,6 +19,9 @@ import java.util.Properties;
  * <p>Any key but {@code api}, {@code per_minute} and {@code steps} can be given for one
  * bot as {@code <name>.<key>} ({@code Alice.model=...}): a bot of its own model.
  * The key is read from here and nowhere else; it is never said in the game.
+ *
+ * <p>The same file holds the server's defaults for the bots' settings, as
+ * {@code default.<setting>=...} (see {@link Settings}).
  */
 final class BrainConfig {
 
@@ -46,6 +49,9 @@ final class BrainConfig {
             per_minute=6
             #
             # Any of url, model, key or timeout for one bot only: <name>.<key>=...
+            #
+            # A setting's value for every bot that has none of its own (/tachyon settings
+            # lists them): default.<setting>=..., as default.sprint=false
             """;
 
     private final Properties p;
@@ -118,6 +124,12 @@ final class BrainConfig {
 
     int perMinute() {
         return Math.max(1, number(null, "per_minute", 6));
+    }
+
+    /** A setting's server default, {@code default.<setting>}, as written (null: none). */
+    String serverDefault(String setting) {
+        String v = p.getProperty("default." + setting);
+        return v == null ? null : v.trim();
     }
 
     /** What {@code brain} shows: everything but the key, which is only said to be there or not. */

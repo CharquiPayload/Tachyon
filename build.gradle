@@ -28,6 +28,10 @@ neoForge {
             sourceSet sourceSets.main
         }
     }
+
+    // The tests load the mod's classes (a tool's words, a bot's data), which name
+    // Minecraft's and Gson's: on the classpath, though no game is started.
+    addModdingDependenciesTo sourceSets.test
 }
 
 repositories { mavenCentral() }

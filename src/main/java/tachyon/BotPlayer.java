@@ -24,6 +24,8 @@ final class BotPlayer extends ServerPlayer {
 
     /** Presses the keys for the tick about to run; null = none pressed. */
     Runnable pilot;
+    /** The bot this is the body of, while it is in the game (null once it left): see {@link Bots#of}. */
+    Bots.Bot bot;
 
     BotPlayer(MinecraftServer server, ServerLevel level, GameProfile profile) {
         super(server, level, profile, ClientInformation.createDefault());
@@ -56,6 +58,6 @@ final class BotPlayer extends ServerPlayer {
     @Override
     public void die(DamageSource cause) {
         super.die(cause);
-        Bots.died(this);
+        Bots.died(this, cause);
     }
 }

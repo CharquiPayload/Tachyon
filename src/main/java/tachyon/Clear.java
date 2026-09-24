@@ -242,7 +242,8 @@ final class Clear extends Job {
             }
             if (seen.equals(goal)) {
                 if (p.path != null) Bots.halt(p, doing());
-                start(p, hit.getDirection());
+                // The first stroke is the hands', and waits while a reflex holds them.
+                if (Bots.handsFree(p)) start(p, hit.getDirection());
                 return true;
             }
             // In reach and hidden behind something it may not break (outside the box, or

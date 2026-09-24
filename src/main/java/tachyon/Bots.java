@@ -1,12 +1,16 @@
 package tachyon;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import com.mojang.authlib.GameProfile;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.context.ParsedCommandNode;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.tree.CommandNode;
 import com.mojang.logging.LogUtils;
 import tachyon.path.Route;
 import net.minecraft.commands.CommandSourceStack;
@@ -14,13 +18,9 @@ import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.EntityAnchorArgument;
 import net.minecraft.commands.arguments.EntityArgument;
-import net.minecraft.commands.arguments.ResourceArgument;
 import net.minecraft.commands.arguments.ScoreHolderArgument;
-import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.core.Holder;
-import net.minecraft.core.registries.Registries;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.DisconnectionDetails;
 import net.minecraft.network.chat.Component;
@@ -30,6 +30,8 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.BlockHitResult;
@@ -38,6 +40,7 @@ import net.minecraft.world.scores.ScoreHolder;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.ServerChatEvent;
+import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import org.slf4j.Logger;
@@ -47,17 +50,20 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -83,14 +89,24 @@ import java.util.stream.Collectors;
  *   /tachyon hunt &lt;who&gt; &lt;mob&gt; [count] kills that many each (every one around)
  *   /tachyon clear &lt;who&gt; &lt;from&gt; &lt;to&gt; breaks every block in the box
  *   /tachyon tell &lt;who&gt; &lt;words&gt;   as if said to it in the chat
+ *   /tachyon settings &lt;who&gt;         its settings, and where each comes from
+ *   /tachyon set &lt;who&gt; &lt;key&gt; &lt;value|default&gt;  one of them changed
  *   /tachyon brain [reload]         how they think (tachyon.properties)
  *   /tachyon owner &lt;who&gt; [player]   whose it is, or give it to them
  *   /tachyon list | stats [reset]
  * </pre>
  *
+ * <p>Here are the bots' coming and going (spawn, remove, owner, list), their brain and
+ * figures, their orders, and their legs: the routes and the keys. What they do is the
+ * abilities' ({@link Abilities}): each brings its commands, tools, settings and
+ * reflexes, orders the bots through the {@code order...} methods here, and is told of
+ * their lives through its hooks. A reflex may take a bot's body or hands over for a
+ * while ({@link #takeOver}, {@link #holdHands}), and its order waits meanwhile.
+ *
  * <p>Operators order every bot; any other player, the bots that are theirs (who
  * brought it in, or whom an operator gave it to). Bringing them in, handing them over,
- * the brain and the figures are the operators'.
+ * the brain and the figures are the operators'. Whose a bot is, is kept in its data
+ * ({@link BotData}): brought in again from the console, it is still its owner's.
  *
  * <p>{@code <who>} is a bot's name, or a pattern where {@code *} stands for any run
  * of characters ({@code *} is every bot, {@code Bot*} every one whose name starts so),
@@ -104,6 +120,8 @@ public final class Bots {
     private static final int SPAWN_MAX = 100;
     /** At most this many blocks in a box to clear. */
     private static final long CLEAR_MAX = 100_000;
+    /** A bot's data that changed is written this often at most (besides when it leaves). */
+    private static final int SAVE_TICKS = 20 * 30;
 
     // The numbers of Masurium's client Walker: tuned against a player's physics, which is
     // what a bot has.
@@ -154,7 +172,11 @@ public final class Bots {
 
     static final class Bot {
         final BotPlayer body;
+        /** What it keeps across leaving and coming back: read as it comes in. */
+        final BotData data;
         String doing = "standing";
+        /** Why it is leaving, once it is (null while it is in the game): for Ability.left. */
+        Leaving leaving;
 
         // What it walks, and what for.
         List<Route.Point> path;
@@ -190,13 +212,65 @@ public final class Bots {
         /** Who gave the order it carries out, to be told when it is over (null: nobody to tell). */
         Order order;
 
-        Bot(BotPlayer body) {
+        // What waits, and who holds what: see takeOver, holdHands and orderStanding.
+        /** The reflex that holds its body, or null; and the order it set aside meanwhile. */
+        Ability heldBy;
+        Aside aside;
+        /** The reflex that holds its hands, until that tick. */
+        Ability handsBy;
+        long handsUntil;
+        /** Its standing order: its job, live or set aside for a detour, and who gave it. Null: none. */
+        Standing standing;
+
+        /** Each ability's own state for it while it is in the game: see slot. */
+        private final Map<Class<?>, Object> slots = new HashMap<>();
+
+        Bot(BotPlayer body, BotData data) {
             this.body = body;
+            this.data = data;
         }
 
         String name() {
             return body.getGameProfile().getName();
         }
+
+        /** Why it is leaving, in Ability.left; null while it is in the game. */
+        Leaving leaving() {
+            return leaving;
+        }
+
+        /**
+         * An ability's own state for this bot while it is in the game (a timer, a counter,
+         * a list of reminders), by a class of the ability's: made by {@code make} the first
+         * time, gone when the bot leaves. What must outlast that goes in {@link #data}. On
+         * the server's thread.
+         */
+        <T> T slot(Class<T> key, Supplier<? extends T> make) {
+            Object v = slots.get(key);
+            if (v == null) {
+                v = make.get();
+                slots.put(key, v);
+            }
+            return key.cast(v);
+        }
+    }
+
+    /** Why a bot leaves the game. */
+    enum Leaving {
+        /** {@code /tachyon remove}. */
+        REMOVED,
+        /** Its body died: a player's death, with no screen to press "respawn" on. */
+        DIED,
+        /** The server stops. */
+        STOPPING
+    }
+
+    /** An order set aside while a reflex holds the body: taken up again when it lets go. */
+    private record Aside(Job job, BlockPos target, ServerPlayer following, Order order) {
+    }
+
+    /** A standing order: a job that detours wait for, and who is told when it is over. */
+    private record Standing(Job job, Order by) {
     }
 
     /**
@@ -210,7 +284,7 @@ public final class Bots {
      * A command's order, to be told back: only to one bot. A crowd's reports would flood
      * whoever gave it; theirs are in {@code list}.
      */
-    private static Order order(CommandSourceStack s, List<Bot> them) {
+    static Order order(CommandSourceStack s, List<Bot> them) {
         if (them.size() != 1) return null;
         ServerPlayer pl = s.getPlayer();
         return new Order(pl == null ? null : pl.getUUID(), s.getTextName(), false);
@@ -253,44 +327,22 @@ public final class Bots {
 
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
-        event.getDispatcher().register(Commands.literal("tachyon")
-                // Orders are anyone's to give, to the bots they own (see find);
-                // bringing bots in, handing them over and the server's figures
-                // are the operators'.
-                .then(Commands.literal("spawn")
+        LiteralArgumentBuilder<CommandSourceStack> tachyon = Commands.literal("tachyon");
+        // Orders are anyone's to give, to the bots they own (see find); bringing bots
+        // in, handing them over and the server's figures are the operators'.
+        tachyon.then(Commands.literal("spawn")
                         .requires(Bots::operator)
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .executes(c -> spawn(c, 0))
                                 .then(Commands.argument("count", IntegerArgumentType.integer(1, SPAWN_MAX))
                                         .executes(c -> spawn(c, IntegerArgumentType.getInteger(c, "count"))))))
                 .then(Commands.literal("remove")
-                        .then(who().executes(Bots::remove)))
-                .then(Commands.literal("goto")
-                        .then(who()
-                                .then(Commands.argument("pos", BlockPosArgument.blockPos())
-                                        .executes(Bots::goTo))))
-                .then(Commands.literal("follow")
-                        .then(who()
-                                .then(Commands.argument("player", EntityArgument.player())
-                                        .executes(Bots::follow))))
-                .then(Commands.literal("stop")
-                        .then(who().executes(Bots::stop)))
-                .then(Commands.literal("hunt")
-                        .then(who()
-                                .then(Commands.argument("mob", ResourceArgument.resource(event.getBuildContext(), Registries.ENTITY_TYPE))
-                                        .executes(c -> hunt(c, 0))
-                                        .then(Commands.argument("count", IntegerArgumentType.integer(1, 10_000))
-                                                .executes(c -> hunt(c, IntegerArgumentType.getInteger(c, "count")))))))
-                .then(Commands.literal("clear")
-                        .then(who()
-                                .then(Commands.argument("from", BlockPosArgument.blockPos())
-                                        .then(Commands.argument("to", BlockPosArgument.blockPos())
-                                                .executes(Bots::clear)))))
-                .then(Commands.literal("tell")
-                        .then(who()
-                                .then(Commands.argument("text", StringArgumentType.greedyString())
-                                        .executes(Bots::tell))))
-                .then(Commands.literal("owner")
+                        .then(who().executes(Bots::remove)));
+        // The mod's own that come after the abilities', made first so that an ability
+        // that adds one of their names is told (see Abilities.commands).
+        LiteralArgumentBuilder<CommandSourceStack> rest = Commands.literal("tachyon");
+        Settings.commands(rest);
+        rest.then(Commands.literal("owner")
                         .requires(Bots::operator)
                         .then(who()
                                 .executes(Bots::owner)
@@ -310,7 +362,13 @@ public final class Bots {
                         .then(Commands.literal("reset").executes(c -> {
                             STATS.reset();
                             return say(c.getSource(), "bot stats reset");
-                        }))));
+                        })));
+        Set<String> taken = new HashSet<>();
+        for (CommandNode<CommandSourceStack> n : rest.getArguments()) taken.add(n.getName());
+        // What they do: every ability's commands (goto, follow, stop, hunt, clear, tell...).
+        Abilities.commands(tachyon, event.getBuildContext(), taken);
+        for (CommandNode<CommandSourceStack> n : rest.getArguments()) tachyon.then(n);
+        event.getDispatcher().register(tachyon);
     }
 
     /**
@@ -318,7 +376,7 @@ public final class Bots {
      * {@code /scoreboard} takes {@code *} with: it reads any word up to a space (a word
      * argument refuses {@code *}) or a selector, and a client without the mod knows it.
      */
-    private static RequiredArgumentBuilder<CommandSourceStack, ScoreHolderArgument.Result> who() {
+    static RequiredArgumentBuilder<CommandSourceStack, ScoreHolderArgument.Result> who() {
         return Commands.argument(WHO, ScoreHolderArgument.scoreHolders())
                 .suggests((c, b) -> {
                     List<String> names = new ArrayList<>(List.of("*"));
@@ -389,16 +447,35 @@ public final class Bots {
     }
 
     private static boolean spawn(CommandSourceStack source, String name, Vec3 at) {
-        if (!NAME.matcher(name).matches()) {
-            fail(source, name + " is no player name: 3 to 16 letters, digits or _");
+        String refused = refusal(source.getServer(), name);
+        if (refused != null) {
+            fail(source, refused);
             return false;
         }
-        MinecraftServer server = source.getServer();
-        if (server.getPlayerList().getPlayerByName(name) != null) {
-            fail(source, name + " is already in the game");
-            return false;
-        }
-        ServerLevel level = source.getLevel();
+        // Whoever brings it in owns it (a bot too, through execute as); from the console,
+        // nobody, so it is still its last owner's.
+        bringIn(source.getServer(), source.getLevel(), name, at, source.getRotation().y, source.getPlayer());
+        return true;
+    }
+
+    /** Why no bot of that name can come in (no player name, or one in the game already), or null. */
+    static String refusal(MinecraftServer server, String name) {
+        if (!NAME.matcher(name).matches()) return name + " is no player name: 3 to 16 letters, digits or _";
+        if (server.getPlayerList().getPlayerByName(name) != null) return name + " is already in the game";
+        return null;
+    }
+
+    /**
+     * A bot into the game, through the door a joining player uses: its body (what its
+     * player save kept: inventory, health, where it stood), its data, its owner, then the
+     * abilities told. The name must be free (see {@link #refusal}). Every way in goes
+     * through here: a spawn, and whatever brings bots back later (a respawn, a restart).
+     *
+     * @param at    where it stands, facing {@code yaw}; null: where its player save left it
+     *              (the world's spawn, the first time)
+     * @param owner whose it is from now on; null: whose its data says it was
+     */
+    static Bot bringIn(MinecraftServer server, ServerLevel level, String name, Vec3 at, float yaw, ServerPlayer owner) {
         GameProfile profile = new GameProfile(UUIDUtil.createOfflinePlayerUUID(name), name);
         BotPlayer body = new BotPlayer(server, level, profile);
         server.getPlayerList().placeNewPlayer(new BotConnection(), body, CommonListenerCookie.createInitial(profile, false));
@@ -410,123 +487,106 @@ public final class Bots {
             body.deathTime = 0;
             body.clearFire();
         }
-        body.teleportTo(level, at.x, at.y, at.z, source.getRotation().y, 0);
-        Bot p = new Bot(body);
-        if (source.getPlayer() != null) {
-            p.owner = source.getPlayer().getUUID();
-            p.ownerName = source.getPlayer().getGameProfile().getName();
-        }
+        if (at != null) body.teleportTo(level, at.x, at.y, at.z, yaw, 0);
+        // Its file, read here on the server's thread as the player's own save just was:
+        // a few hundred bytes, once, as it comes in.
+        Bot p = new Bot(body, BotData.load(BotData.folder(server), name));
+        if (owner != null) setOwner(p, owner);
+        else ownerFromData(p);
+        body.bot = p;
         body.pilot = () -> pilot(p);
         ALL.put(key(name), p);
         LOG.info("[tachyon] bot {} spawned at {}", name, body.blockPosition());
-        return true;
+        Abilities.joined(p);
+        return p;
     }
+
+    /** The bot an entity is the body of (an event's, say), or null when it is none in the game. */
+    static Bot of(Entity e) {
+        return e instanceof BotPlayer b ? b.bot : null;
+    }
+
+    /** Whose it is, from now on; kept in its data. */
+    private static void setOwner(Bot p, ServerPlayer to) {
+        p.owner = to.getUUID();
+        p.ownerName = to.getGameProfile().getName();
+        JsonObject kept = p.data.section(OWNER);
+        String uuid = p.owner.toString();
+        if (new JsonPrimitive(uuid).equals(kept.get("uuid")) && new JsonPrimitive(p.ownerName).equals(kept.get("name"))) {
+            return;             // already so: nothing to write
+        }
+        kept.addProperty("uuid", uuid);
+        kept.addProperty("name", p.ownerName);
+        p.data.changed();
+    }
+
+    /** Whose it was, as its data keeps it (nothing kept: nobody's). */
+    private static void ownerFromData(Bot p) {
+        JsonObject kept = p.data.read(OWNER);
+        if (!kept.has("uuid")) return;
+        try {
+            p.owner = UUID.fromString(kept.get("uuid").getAsString());
+            p.ownerName = kept.has("name") ? kept.get("name").getAsString() : p.owner.toString();
+        } catch (RuntimeException e) {
+            // Edited by hand into something else: nobody's, as with nothing kept.
+            p.owner = null;
+            p.ownerName = null;
+            LOG.warn("[tachyon] {}'s data: its owner {} is no owner; it is nobody's", p.name(), kept);
+        }
+    }
+
+    /** The section of a bot's data its owner is kept in: {@code uuid} and {@code name}. */
+    private static final String OWNER = "owner";
 
     private static int remove(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
         List<Bot> them = find(c);
-        for (Bot p : them) {
-            ALL.remove(key(p.name()));
-            leave(p, "removed");
-        }
+        for (Bot p : them) leave(p, Leaving.REMOVED);
         return told(c, them, "left");
-    }
-
-    private static int goTo(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
-        List<Bot> them = find(c);
-        BlockPos to = BlockPosArgument.getBlockPos(c, "pos");
-        Order by = order(c.getSource(), them);
-        for (Bot p : them) orderGoto(p, to, by);
-        return told(c, them, "searching a way to " + to.toShortString());
-    }
-
-    private static int follow(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
-        ServerPlayer leader = EntityArgument.getPlayer(c, "player");
-        String name = leader.getGameProfile().getName();
-        // A bot the pattern also takes in does not follow itself.
-        List<Bot> them = find(c).stream().filter(p -> p.body != leader).toList();
-        Order by = order(c.getSource(), them);
-        for (Bot p : them) orderFollow(p, leader, by);
-        return told(c, them, "following " + name);
-    }
-
-    /** @param count how many each is to kill; 0: every one around */
-    private static int hunt(CommandContext<CommandSourceStack> c, int count) throws CommandSyntaxException {
-        List<Bot> them = find(c);
-        Holder.Reference<EntityType<?>> mob = ResourceArgument.getEntityType(c, "mob");
-        String name = mob.key().location().getPath();
-        if (mob.value() == EntityType.PLAYER) return fail(c.getSource(), "players are never prey");
-        Order by = order(c.getSource(), them);
-        for (Bot p : them) orderHunt(p, mob.value(), name, count, by);
-        return told(c, them, "hunting " + name + (count > 0 ? ", " + count + " each" : ", every one around"));
-    }
-
-    private static int clear(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
-        List<Bot> them = find(c);
-        BlockPos a = BlockPosArgument.getLoadedBlockPos(c, "from"), b = BlockPosArgument.getLoadedBlockPos(c, "to");
-        String refused = tooBig(a, b);
-        if (refused != null) return fail(c.getSource(), refused);
-        Clear.Area area = new Clear.Area(c.getSource().getLevel(), a, b);
-        Order by = order(c.getSource(), them);
-        for (Bot p : them) clearWith(p, area, by);
-        return told(c, them, "clearing " + area.box() + " (" + volume(a, b) + " blocks)");
-    }
-
-    private static int stop(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
-        List<Bot> them = find(c);
-        for (Bot p : them) orderStop(p);
-        return told(c, them, "standing still");
-    }
-
-    /** Words to a bot from the console or a command, as if said to it in the chat. */
-    private static int tell(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
-        List<Bot> them = find(c);
-        String text = StringArgumentType.getString(c, "text");
-        ServerPlayer from = c.getSource().getPlayer();
-        for (Bot p : them) {
-            brain(p).hear(from == null ? null : from.getUUID(), c.getSource().getTextName(), text);
-        }
-        return told(c, them, "heard it");
     }
 
     // --- orders: from the commands and from the brain's tools -----------------------------
 
     // Each order replaces the last, which then is not over by itself: nobody is told.
-    // {@code by}: who is told when this one is (null: nobody).
+    // {@code by}: who is told when this one is (null: nobody). An ability's own orders
+    // are made the same way; one that starts a job, with orderJob. The abilities hear of
+    // each through Ability.ordered.
 
     static void orderGoto(Bot p, BlockPos to, Order by) {
-        endJob(p);
+        clearFor(p);
         p.order = by;
         p.following = null;
         p.target = to;
         p.replans = 0;
         plan(p, to, "going to " + to.toShortString());
+        Abilities.ordered(p);
     }
 
     static void orderFollow(Bot p, ServerPlayer leader, Order by) {
-        endJob(p);
+        clearFor(p);
         p.order = by;
         p.following = leader;
         p.target = null;
         p.plannedAt = -REPLAN_TICKS;
         p.leaderX = Double.NaN;
         p.doing = "following " + leader.getGameProfile().getName();
+        Abilities.ordered(p);
     }
 
+    /** It stops whatever it does, a standing order too, and stands. */
     static void orderStop(Bot p) {
+        dropHold(p);
         endJob(p);
+        // A standing order set aside for a detour: its job was let go of then.
+        p.standing = null;
         p.order = null;
         p.following = null;
         p.target = null;
         halt(p, "standing");
+        Abilities.ordered(p);
     }
 
     static void orderHunt(Bot p, EntityType<?> prey, String name, int count, Order by) {
-        endJob(p);
-        p.order = by;
-        p.following = null;
-        p.target = null;
-        halt(p, "hunting " + name);
-        p.job = new Hunt(prey, name, count);
+        orderJob(p, new Hunt(prey, name, count), "hunting " + name, by);
     }
 
     /** @return why not (a box too big), or null once the order is given */
@@ -537,21 +597,171 @@ public final class Bots {
         return null;
     }
 
-    private static void clearWith(Bot p, Clear.Area area, Order by) {
-        endJob(p);
+    /** A box to clear that others may be told to clear too: they share it. */
+    static void clearWith(Bot p, Clear.Area area, Order by) {
+        orderJob(p, new Clear(area), "clearing " + area.box(), by);
+    }
+
+    /**
+     * A job for it, in place of whatever it did: it stops walking, says {@code doing}
+     * until the job says otherwise, and {@code by} is told when the job is over by itself.
+     */
+    static void orderJob(Bot p, Job job, String doing, Order by) {
+        clearFor(p);
         p.order = by;
         p.following = null;
         p.target = null;
-        halt(p, "clearing " + area.box());
-        p.job = new Clear(area);
+        halt(p, doing);
+        p.job = job;
+        Abilities.ordered(p);
     }
 
-    private static long volume(BlockPos a, BlockPos b) {
+    /**
+     * A standing order (an escort, a guard, an errand to come back to): a job, as
+     * orderJob gives it, that the orders given after it do not end. They are detours: its
+     * job is set aside (told {@link Job#end}, and kept), and taken up again when the
+     * detour is over by itself. Stop ends it, and so does another standing order; and so
+     * does its job, over by itself, when {@code by} is told.
+     */
+    static void orderStanding(Bot p, Job job, String doing, Order by) {
+        dropHold(p);
+        endJob(p);
+        p.standing = null;          // one before it, set aside: let go of when it was
+        p.order = by;
+        p.following = null;
+        p.target = null;
+        halt(p, doing);
+        p.job = job;
+        p.standing = new Standing(job, by);
+        Abilities.ordered(p);
+    }
+
+    /**
+     * What it did, cleared for a new order: its job ended; but a standing order's is set
+     * aside, to be taken up again once the new order is over. A reflex that held its body
+     * lets go of it: the new order is what it does now (the reflex may take it again).
+     */
+    private static void clearFor(Bot p) {
+        dropHold(p);
+        if (p.job != null && p.standing != null && p.job == p.standing.job()) {
+            Job j = p.job;
+            p.job = null;
+            j.end(p);
+        } else {
+            endJob(p);
+        }
+    }
+
+    /** A standing order set aside, taken up again once it has nothing else to do. */
+    private static void takeUpStanding(Bot p) {
+        Standing s = p.standing;
+        if (s == null || p.heldBy != null || p.job != null || p.target != null || p.following != null) return;
+        halt(p, s.job().status());
+        p.job = s.job();
+        p.order = s.by();
+        Abilities.ordered(p);
+    }
+
+    // --- reflexes: the body or the hands, taken over for a while ---------------------------
+
+    /**
+     * Its body, taken over by a reflex (fleeing, coming up for air): its order is set
+     * aside (its job told {@link Job#end} and kept; where it went, whom it followed and
+     * who is told kept too) and it stands, saying {@code doing}, until the reflex gives it
+     * back. Meanwhile its job does not think and its follow does not search; the walk is
+     * the reflex's: {@link #plan} a route and it is walked, or press keys in
+     * {@link Ability#act}. An order given meanwhile ends the hold and replaces what was set
+     * aside (the reflex sees it no longer holds it, and may take it again).
+     *
+     * @return whether the reflex holds it now: false when another does (first come, first served)
+     */
+    static boolean takeOver(Bot p, Ability by, String doing) {
+        if (p.heldBy == by) return true;
+        if (p.heldBy != null) return false;
+        Job j = p.job;
+        p.job = null;
+        if (j != null) j.end(p);
+        p.aside = new Aside(j, p.target, p.following, p.order);
+        p.target = null;
+        p.following = null;
+        p.order = null;
+        p.heldBy = by;
+        halt(p, doing);
+        return true;
+    }
+
+    /** The reflex that holds its body, or null. */
+    static Ability holding(Bot p) {
+        return p.heldBy;
+    }
+
+    /**
+     * Its body, given back by the reflex that held it: its order taken up again where it
+     * was, a walk searched again from where it stands. Nothing, if {@code by} does not hold it.
+     */
+    static void giveBack(Bot p, Ability by) {
+        if (p.heldBy != by) return;
+        Aside a = p.aside;
+        p.heldBy = null;
+        p.aside = null;
+        halt(p, "standing");
+        p.job = a.job();
+        p.target = a.target();
+        p.following = a.following();
+        p.order = a.order();
+        if (p.target != null) {
+            p.replans = 0;
+            plan(p, p.target, "going to " + p.target.toShortString());
+        } else if (p.following != null) {
+            p.plannedAt = -REPLAN_TICKS;
+            p.leaderX = Double.NaN;
+            p.doing = "following " + p.following.getGameProfile().getName();
+        } else if (p.job != null) {
+            p.doing = p.job.status();
+        } else {
+            takeUpStanding(p);
+        }
+    }
+
+    /** A hold on its body ended by an order: what it set aside is replaced (its job was let go of then). */
+    private static void dropHold(Bot p) {
+        p.heldBy = null;
+        p.aside = null;
+    }
+
+    /**
+     * Its hands, for {@code ticks} ticks, by a reflex (a bite, a swing, a bow drawn): the
+     * job's hands wait (its act is skipped, and {@link Job#hold} swaps nothing), while its
+     * walk goes on. Asked again, it is held longer. For longer than a few seconds, the
+     * body is the thing to take.
+     *
+     * @return whether the reflex holds them: false while another does
+     */
+    static boolean holdHands(Bot p, Ability by, int ticks) {
+        long now = p.body.getServer().getTickCount();
+        if (p.handsBy != null && p.handsBy != by && now < p.handsUntil) return false;
+        p.handsBy = by;
+        p.handsUntil = now + ticks;
+        return true;
+    }
+
+    /** Its hands, let go of by the reflex that held them. */
+    static void freeHands(Bot p, Ability by) {
+        if (p.handsBy == by) p.handsBy = null;
+    }
+
+    /** No reflex holds its hands: the job's are free to act. */
+    static boolean handsFree(Bot p) {
+        return p.handsBy == null || p.body.getServer().getTickCount() >= p.handsUntil;
+    }
+
+    static long volume(BlockPos a, BlockPos b) {
         return (long) (Math.abs(a.getX() - b.getX()) + 1) * (Math.abs(a.getY() - b.getY()) + 1)
                 * (Math.abs(a.getZ() - b.getZ()) + 1);
     }
 
-    private static String tooBig(BlockPos a, BlockPos b) {
+    /** Why a box is not to be cleared (too big), or null. */
+    static String tooBig(BlockPos a, BlockPos b) {
         long v = volume(a, b);
         return v > CLEAR_MAX ? "a box of " + v + " blocks: " + CLEAR_MAX + " at most" : null;
     }
@@ -567,10 +777,11 @@ public final class Bots {
     private static final Map<UUID, ArrayDeque<Long>> SPOKE = new HashMap<>();
 
     /**
-     * A bot named in the chat hears it: by its name as a word, in any case. Only its
-     * owner is heard, operators not included: the rest cost nothing, since every answer
-     * is a call to a model someone pays for. And no more than {@code per_minute} times a
-     * minute a player.
+     * A bot named in the chat hears it: by its name as a word, in any case. The abilities
+     * have their say first (Ability.heard: a stop word answered at once, a listener more);
+     * then only its owner is heard, operators not included: the rest cost nothing, since
+     * every answer is a call to a model someone pays for. And no more than
+     * {@code per_minute} times a minute a player.
      */
     @SubscribeEvent
     public void onChat(ServerChatEvent event) {
@@ -582,7 +793,11 @@ public final class Bots {
             if (p.body != from && NAMED.apply(p.name()).matcher(text).find()) named.add(p);
         }
         if (named.isEmpty()) return;
-        List<Bot> heard = named.stream().filter(p -> from.getUUID().equals(p.owner)).toList();
+        List<Bot> heard = new ArrayList<>();
+        for (Bot p : named) {
+            Ability.Heard h = Abilities.heard(p, from, text);
+            if (h == Ability.Heard.LISTEN || h == Ability.Heard.PASS && from.getUUID().equals(p.owner)) heard.add(p);
+        }
         if (heard.isEmpty()) return;
         long now = System.currentTimeMillis();
         ArrayDeque<Long> times = SPOKE.computeIfAbsent(from.getUUID(), k -> new ArrayDeque<>());
@@ -615,7 +830,7 @@ public final class Bots {
      * matches, {@code *} being any run of characters, in any case. None is a failure,
      * said.
      */
-    private static List<Bot> find(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+    static List<Bot> find(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
         String typed = typed(c);
         List<Bot> them;
         if (typed.startsWith("@")) {
@@ -657,10 +872,7 @@ public final class Bots {
             return say(c.getSource(), String.join("\n", lines));
         }
         ServerPlayer to = EntityArgument.getPlayer(c, "player");
-        for (Bot p : them) {
-            p.owner = to.getUUID();
-            p.ownerName = to.getGameProfile().getName();
-        }
+        for (Bot p : them) setOwner(p, to);
         return told(c, them, "now " + to.getGameProfile().getName() + "'s");
     }
 
@@ -673,7 +885,7 @@ public final class Bots {
     }
 
     /** What some bots were told, in a line: by name when one, by count when more. */
-    private static int told(CommandContext<CommandSourceStack> c, List<Bot> them, String doing) {
+    static int told(CommandContext<CommandSourceStack> c, List<Bot> them, String doing) {
         if (them.isEmpty()) return 0;
         say(c.getSource(), (them.size() == 1 ? them.get(0).name() : them.size() + " bots") + ": " + doing);
         return them.size();
@@ -683,43 +895,99 @@ public final class Bots {
         return name.toLowerCase(Locale.ROOT);
     }
 
-    private static int say(CommandSourceStack source, String text) {
+    static int say(CommandSourceStack source, String text) {
         source.sendSuccess(() -> Component.literal("[tachyon] " + text), false);
         return 1;
     }
 
-    private static int fail(CommandSourceStack source, String text) {
+    static int fail(CommandSourceStack source, String text) {
         source.sendFailure(Component.literal("[tachyon] " + text));
         return 0;
     }
 
     // --- coming and going ---------------------------------------------------------------
 
-    /** Its death, from the body: it leaves, as a disconnected player would. */
-    static void died(BotPlayer body) {
-        for (Bot p : ALL.values()) {
-            if (p.body != body) continue;
-            endJob(p);
-            if (p.brain != null) p.brain.stop();
-        }
-        ALL.values().removeIf(p -> p.body == body);
-        body.pilot = null;
-        body.getServer().execute(() -> body.connection.onDisconnect(
-                new DisconnectionDetails(Component.literal("died"), Optional.empty(), Optional.empty())));
+    /** Its death, from the body ({@link BotPlayer#die}): it leaves, as a disconnected player would. */
+    static void died(BotPlayer body, DamageSource cause) {
+        Bot p = body.bot;
+        if (p == null) return;          // already on its way out
+        Abilities.died(p, cause);
+        leave(p, Leaving.DIED);
     }
 
-    private static void leave(Bot p, String why) {
+    /**
+     * It leaves the game. The abilities are told first, while it is still among the bots
+     * and its order is as it was; then its hands and brain are stopped, its data written
+     * (on the writer's thread; at the server's stop, here), and its body let go. A dead
+     * body is disconnected at the end of the tick: its death is being dealt out right now,
+     * inside its hurt, which goes on after this.
+     */
+    private static void leave(Bot p, Leaving why) {
+        p.leaving = why;
+        Abilities.left(p);
+        dropHold(p);
         endJob(p);
+        p.standing = null;
         if (p.brain != null) p.brain.stop();
         if (p.pending != null) p.pending.cancel(true);
-        p.body.pilot = null;
-        p.body.connection.onDisconnect(new DisconnectionDetails(Component.literal(why), Optional.empty(), Optional.empty()));
+        if (why == Leaving.STOPPING) p.data.saveNow();
+        else p.data.saveLater();
+        ALL.remove(key(p.name()));
+        BotPlayer body = p.body;
+        body.pilot = null;
+        body.bot = null;
+        String words = switch (why) {
+            case REMOVED -> "removed";
+            case DIED -> "died";
+            case STOPPING -> "the server stops";
+        };
+        Runnable disconnect = () -> body.connection.onDisconnect(
+                new DisconnectionDetails(Component.literal(words), Optional.empty(), Optional.empty()));
+        if (why == Leaving.DIED) later(disconnect);
+        else disconnect.run();
     }
 
     @SubscribeEvent
     public void onStopping(ServerStoppingEvent event) {
-        for (Bot p : List.copyOf(ALL.values())) leave(p, "the server stops");
+        runLater();
+        for (Bot p : List.copyOf(ALL.values())) leave(p, Leaving.STOPPING);
         ALL.clear();
+        BotData.saveShared(true);
+        BotData.forgetShared();
+        // The writes still on their way, and the ones that failed, of bots long gone too.
+        BotData.stop(10_000);
+    }
+
+    /** A bot hurt: the abilities told (after the hit, before a death it brings). */
+    @SubscribeEvent
+    public void onDamage(LivingDamageEvent.Post event) {
+        Bot p = of(event.getEntity());
+        if (p != null) Abilities.hurt(p, event.getSource(), event.getNewDamage());
+    }
+
+    /** What waits for the end of the tick: see {@link #later}. The server's thread's. */
+    private static final ArrayDeque<Runnable> LATER = new ArrayDeque<>();
+
+    /**
+     * {@code work} at the end of this tick, on the server's thread: for what must not
+     * happen in the middle of a body's tick or of the bots' loop (a bot sent away, the
+     * list of bots changed). {@code server.execute} does NOT wait on the server's thread:
+     * there it runs at once, in the middle of whatever called it. From another thread,
+     * {@code server.execute} is the way back.
+     */
+    static void later(Runnable work) {
+        LATER.addLast(work);
+    }
+
+    private static void runLater() {
+        Runnable r;
+        while ((r = LATER.pollFirst()) != null) {
+            try {
+                r.run();
+            } catch (RuntimeException e) {
+                LOG.warn("[tachyon] something left for the end of the tick failed", e);
+            }
+        }
     }
 
     // --- what a tick costs --------------------------------------------------------------
@@ -734,6 +1002,18 @@ public final class Bots {
 
     @SubscribeEvent
     public void onTick(ServerTickEvent.Post event) {
+        runLater();
+        int tick = event.getServer().getTickCount();
+        // What changed in the bots' data, every 30 s: a crash loses that much at most.
+        // Each bot on a tick of its own (by its name), so that a crowd's copies are not
+        // all taken in one tick; the shared stores and the writes that failed, together.
+        for (Bot p : ALL.values()) {
+            if (Math.floorMod(tick + p.name().hashCode(), SAVE_TICKS) == 0) p.data.saveLater();
+        }
+        if (tick % SAVE_TICKS == 0) {
+            BotData.saveShared(false);
+            BotData.retry();
+        }
         if (ALL.isEmpty()) return;
         synchronized (STATS) {
             STATS.ticks++;
@@ -745,49 +1025,67 @@ public final class Bots {
 
     // --- the keys, a tick at a time -----------------------------------------------------
 
-    /** Before each tick of its body: what it is doing, turned into keys. */
+    /**
+     * Before each tick of its body: what it is doing, turned into keys. The abilities'
+     * reflexes first (one may take the body or the hands); then, unless a reflex holds
+     * the body, the walk's plans and the job's; the walk's keys; the reflexes' hands; and,
+     * unless the body or the hands are held, the job's hands.
+     */
     private static void pilot(Bot p) {
         if (!p.body.isAlive()) return;
         long now = p.body.getServer().getTickCount();
-        follow(p, now);
-        if (p.job != null && !p.job.think(p, now)) {
-            endJob(p);
-            finished(p);
+        Abilities.tick(p, now);
+        if (p.heldBy == null) {
+            follow(p, now);
+            if (p.job != null && !p.job.think(p, now)) {
+                endJob(p);
+                finished(p);
+            }
         }
         adopt(p);
         steer(p);
-        if (p.job != null) {
-            p.job.act(p);
+        Abilities.act(p, now);
+        if (p.heldBy == null && p.job != null) {
+            if (handsFree(p)) p.job.act(p);
             p.doing = p.job.status();
         }
     }
 
     /**
      * Its order, over by itself (done, or given up), in {@code doing}: whoever gave it is
-     * told, once. Said in the chat, its brain tells them in its words.
+     * told, once. Said in the chat, its brain tells them in its words. Then the abilities
+     * hear of it, and a standing order set aside for this one is taken up again.
      */
     static void finished(Bot p) {
+        String how = p.doing;
         Order o = p.order;
         p.order = null;
-        if (o == null) return;
-        LOG.info("[tachyon] {} is over: {}", p.name(), p.doing);
-        if (o.spoken()) {
-            brain(p).over(o.who(), o.name(), p.doing);
-            return;
+        if (o != null) {
+            LOG.info("[tachyon] {} is over: {}", p.name(), how);
+            if (o.spoken()) {
+                brain(p).over(o.who(), o.name(), how);
+            } else {
+                ServerPlayer pl = o.who() == null ? null : p.body.getServer().getPlayerList().getPlayer(o.who());
+                if (pl != null) pl.sendSystemMessage(Component.literal("[tachyon] " + p.name() + ": " + how));
+            }
         }
-        ServerPlayer pl = o.who() == null ? null : p.body.getServer().getPlayerList().getPlayer(o.who());
-        if (pl != null) pl.sendSystemMessage(Component.literal("[tachyon] " + p.name() + ": " + p.doing));
+        Abilities.over(p, how);
+        takeUpStanding(p);
     }
 
-    /** Its job, over: what its hands held is let go. */
+    /** Its job, over for good: what its hands held is let go. A standing order's, the standing order with it. */
     static void endJob(Bot p) {
         if (p.job == null) return;
         Job j = p.job;
         p.job = null;
+        if (p.standing != null && p.standing.job() == j) p.standing = null;
         j.end(p);
     }
 
-    /** Every bot in the game, for a job that looks at what the others do. */
+    /**
+     * Every bot in the game, for a job that looks at what the others do. The live list:
+     * to send some away or bring some in while going through it, go through a copy.
+     */
     static Collection<Bot> all() {
         return ALL.values();
     }
@@ -812,6 +1110,17 @@ public final class Bots {
      * (null: the tile {@code to} itself). {@code to} bounds the chunks read.
      */
     static void plan(Bot p, BlockPos to, Function<SnapshotWorld, Route.Meta> goal, String doing) {
+        // Partial routes: a stretch that gets closer is walked and searched on from its
+        // end, which is what a follower needs and a goto does too (see steer).
+        plan(p, to, goal, new Route.Options(3, Route.Options.byDefault().maxNodes(), false, true), doing);
+    }
+
+    /**
+     * The same, with a search's own options: a longer fall allowed with more health, a
+     * route that builds or breaks its way. What the ability asks for is searched, within
+     * the search's time budget, which is the server's.
+     */
+    static void plan(Bot p, BlockPos to, Function<SnapshotWorld, Route.Meta> goal, Route.Options wanted, String doing) {
         if (p.pending != null) p.pending.cancel(true);
         long started = System.nanoTime();
         BlockPos from = new BlockPos(p.body.getBlockX(), floorY(p), p.body.getBlockZ());
@@ -824,10 +1133,7 @@ public final class Bots {
         }
         Vec3 at = p.body.position();
         Route.Point b = new Route.Point(to.getX(), to.getY(), to.getZ());
-        // Partial routes: a stretch that gets closer is walked and searched on from its
-        // end, which is what a follower needs and a goto does too (see steer).
-        Route.Options options = new Route.Options(3, Route.Options.byDefault().maxNodes(), false, true)
-                .withDeadline(SEARCH_MS);
+        Route.Options options = wanted.withDeadline(SEARCH_MS);
         p.pending = ROUTES.submit(() -> {
             // (whereAmI() and ground() read the snapshot, so they run here, off the
             // server's thread.)
@@ -1068,8 +1374,9 @@ public final class Bots {
         return true;
     }
 
-    /** Only on flat ground with flat ground ahead, and not on the last stretch. */
+    /** Only on flat ground with flat ground ahead, not on the last stretch, and if it may (its setting). */
     private static boolean canRun(Bot p, Route.Point goal) {
+        if (!Settings.bool(p, Walking.SPRINT)) return false;
         if (goal.y() > floorY(p)) return false;
         if (p.next + 1 >= p.path.size()) return false;
         return p.path.get(p.next + 1).y() == goal.y();

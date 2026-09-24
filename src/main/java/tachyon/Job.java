@@ -14,6 +14,11 @@ import java.util.function.ToDoubleFunction;
  * <p>Before the walk, {@link #think} decides where to walk (a search, through
  * {@link Bots#plan}); after the walk has pressed its keys, {@link #act} does what the
  * hands do, and may take the keys over for the last steps, straight at what is near.
+ *
+ * <p>A job may be set aside for a while and taken up again: while a reflex holds the
+ * body ({@link Bots#takeOver}), or while a detour is walked from a standing order
+ * ({@link Bots#orderStanding}). Set aside, it is told {@link #end}, and lets go of what
+ * its hands did; taken up again, it thinks again from its fields, as they were.
  */
 abstract class Job {
 
@@ -27,16 +32,31 @@ abstract class Job {
     void act(Bots.Bot p) {
     }
 
-    /** It ends, however: what the hands were doing is let go. */
+    /**
+     * It ends, however, or it is set aside for a while: what the hands were doing is let
+     * go (a block half broken, a claim on a shared area, a target). What it counted stays:
+     * a job taken up again goes on from there, and finds its target again.
+     */
     void end(Bots.Bot p) {
+    }
+
+    /**
+     * The best in the inventory by {@code score} into the hand, as {@link #wield} puts it
+     * there; but not while a reflex holds the hands ({@link Bots#holdHands}): a bite or a
+     * bow drawn is not swapped for a pickaxe.
+     */
+    static void hold(Bots.Bot p, ToDoubleFunction<ItemStack> score) {
+        if (!Bots.handsFree(p)) return;
+        wield(p, score);
     }
 
     /**
      * The best in the inventory by {@code score} into the hand: selected if it is in the
      * hotbar, swapped into the selected slot if it is not. Nothing better than what is
-     * held, nothing changes.
+     * held, nothing changes. For whoever has the hands: a job through {@link #hold}, a
+     * reflex that holds them directly.
      */
-    static void hold(Bots.Bot p, ToDoubleFunction<ItemStack> score) {
+    static void wield(Bots.Bot p, ToDoubleFunction<ItemStack> score) {
         Inventory inv = p.body.getInventory();
         int best = inv.selected;
         double bestScore = score.applyAsDouble(inv.getItem(best));

@@ -4,15 +4,9 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import org.slf4j.Logger;
 
@@ -21,32 +15,40 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * A bot's brain: what is said to it goes to a model, with the bot's state and its
- * tools; the tools the model calls are run by the server, as orders; its words are said
- * in the chat.
+ * tools (every ability's, see {@link Abilities}); the tools the model calls are run by
+ * the server, as orders; its words are said in the chat.
  *
  * <p>The model is asked on a thread of its own, never on the server's: a slow model is a
- * slow answer, not a slow server. The tools run on the server's thread, where the world
- * is. One thing at a time: what is said while it thinks waits, the last of it.
+ * slow answer, not a slow server. What it is told of the bot (its instructions, its
+ * state, the tools it is offered) is read on the server's thread as each turn starts,
+ * and the tools run there, where the world is. One thing at a time: what is said while
+ * it thinks waits, the last of it.
  *
  * <p>An order given in the chat that is over by itself (done, or given up) is news: the
- * brain is told, with no tools, and says how it went to whoever gave it.
+ * brain is told, with no tools, and says how it went to whoever gave it. What an ability
+ * notices (hunger, a reminder due) is a notice ({@link #notice}): the brain is told, with
+ * its tools, and what it starts is told to its owner.
  */
 final class Brain {
 
     private static final Logger LOG = LogUtils.getLogger();
     /** The turns kept to give the model the thread of the conversation. */
     private static final int HISTORY = 6;
+    /** The notices that wait while it thinks, at most: the oldest are dropped. */
+    private static final int NOTICES_MAX = 4;
     /** A line said in the chat is cut here, and at most this many lines. */
     private static final int LINE_MAX = 240, LINES_MAX = 3;
 
@@ -66,10 +68,25 @@ final class Brain {
 
     static void reload() {
         config = BrainConfig.load();
+        Abilities.settings().forget();
     }
 
-    /** Said to it; or, {@code news}, what came of an order {@code who} gave it. */
-    private record Said(UUID who, String name, String text, boolean news) {
+    /** What a turn is for. */
+    private enum Kind {
+        /** Words said to it, by a player or the console. */
+        WORDS,
+        /** What came of an order {@code who} gave it: told, with no tools. */
+        NEWS,
+        /** Something an ability noticed: told, with its tools, on its owner's behalf. */
+        NOTICE
+    }
+
+    /** Said to it, or news, or a notice; {@code who} is the one it answers (null: the console, or nobody). */
+    private record Said(UUID who, String name, String text, Kind kind) {
+    }
+
+    /** What the model is told of the bot as a turn starts: read on the server's thread. */
+    private record Start(String prompt, String state, JsonArray tools) {
     }
 
     /**
@@ -85,6 +102,9 @@ final class Brain {
     private final Deque<Turn> history = new ArrayDeque<>();
     private Future<?> thinking;
     private Said waiting;
+    private final Deque<Said> notices = new ArrayDeque<>();
+    /** Why its last turn failed (the model did not answer, say), or null when it went well. */
+    private volatile String failure;
 
     Brain(Bots.Bot p) {
         this.p = p;
@@ -95,13 +115,18 @@ final class Brain {
         return thinking != null && !thinking.isDone();
     }
 
+    /** Why its last turn failed, or null when it went well (or there was none). */
+    String failure() {
+        return failure;
+    }
+
     /** Said to it, by a player (or by the console, {@code who} null). On the server's thread. */
     void hear(UUID who, String name, String text) {
         if (config().url(p.name()).isEmpty()) {
             tell(who, p.name() + " has no brain set up (tachyon.properties: url)");
             return;
         }
-        Said said = new Said(who, name, text, false);
+        Said said = new Said(who, name, text, Kind.WORDS);
         if (busy()) {
             waiting = said;         // the last thing said, after this one
             return;
@@ -112,7 +137,7 @@ final class Brain {
     /** An order {@code who} gave it, over by itself: {@code how} it went. On the server's thread. */
     void over(UUID who, String name, String how) {
         if (config().url(p.name()).isEmpty()) return;
-        Said news = new Said(who, name, how, true);
+        Said news = new Said(who, name, how, Kind.NEWS);
         if (busy()) {
             if (waiting == null) waiting = news;        // never instead of what a player said
             return;
@@ -120,9 +145,30 @@ final class Brain {
         thinking = THINK.submit(() -> think(news));
     }
 
+    /**
+     * Something an ability noticed (hungry, hurt, a reminder due), in words for the model:
+     * what happened and what it may do about it ("You are hungry (food 5/20): eat if you
+     * carry food; tell {@code owner} only if you cannot."). The brain is told with its
+     * tools, on its owner's behalf: what it starts is told to its owner when it is over.
+     * Every notice is a paid call to a model: an ability sends one when it matters, and
+     * not again for the same thing for a while. While it thinks, a few wait, after what
+     * was said to it. On the server's thread.
+     */
+    void notice(String text) {
+        if (config().url(p.name()).isEmpty()) return;
+        Said n = new Said(p.owner, p.ownerName == null ? "nobody" : p.ownerName, text, Kind.NOTICE);
+        if (busy()) {
+            if (notices.size() >= NOTICES_MAX) notices.removeFirst();
+            notices.addLast(n);
+            return;
+        }
+        thinking = THINK.submit(() -> think(n));
+    }
+
     void stop() {
         if (thinking != null) thinking.cancel(true);
         waiting = null;
+        notices.clear();
     }
 
     // --- a turn, on a brain thread -------------------------------------------------------
@@ -132,24 +178,28 @@ final class Brain {
         String name = p.name();
         Llm llm = new Llm(cfg.anthropic(), cfg.url(name), cfg.model(name), cfg.key(name), cfg.timeoutSeconds(name));
         try {
+            // Everything read of the bot, read on the server's thread: its data and the
+            // abilities' state are the server's, and change there.
+            Start start = onServer(() -> start(said));
             List<JsonObject> msgs = new ArrayList<>();
-            msgs.add(message("system", prompt()));
+            msgs.add(message("system", start.prompt()));
             for (Turn t : history) msgs.addAll(t.messages());
-            String state = onServer(() -> state(said));
-            String heard = said.news()
-                    ? "(Nobody spoke: news. What " + said.name() + " asked you to do is over: " + said.text()
-                            + ". Tell them how it went, in one short sentence, in the language they write to you in:"
-                            + " only what this says happened, nothing more.)"
-                    : said.name() + ": " + said.text();
-            msgs.add(message("user", "[" + state + "]\n" + heard));
+            String heard = switch (said.kind()) {
+                case NEWS -> "(Nobody spoke: news. What " + said.name() + " asked you to do is over: " + said.text()
+                        + ". Tell them how it went, in one short sentence, in the language they write to you in:"
+                        + " only what this says happened, nothing more.)";
+                case NOTICE -> "(Nobody spoke: a notice. " + said.text() + ")";
+                case WORDS -> said.name() + ": " + said.text();
+            };
+            msgs.add(message("user", "[" + start.state() + "]\n" + heard));
             int from = msgs.size();
 
             String answer = "";
             // News is only told: no tools, so the first answer is words.
-            int steps = said.news() ? 0 : cfg.steps();
+            int steps = said.kind() == Kind.NEWS ? 0 : cfg.steps();
             for (int step = 0; ; step++) {
                 // The last step has no tools: whatever was done, it answers in words.
-                Llm.Reply r = llm.ask(msgs, step < steps ? TOOLS : new JsonArray());
+                Llm.Reply r = llm.ask(msgs, step < steps ? start.tools() : new JsonArray());
                 msgs.add(r.message());
                 if (r.calls().isEmpty() || step >= steps) {
                     // Calls asked for with no tools offered are not run: kept, they would
@@ -159,7 +209,7 @@ final class Brain {
                     break;
                 }
                 for (Llm.ToolCall call : r.calls()) {
-                    String result = onServer(() -> run(call, said));
+                    String result = result(onServer(() -> run(call, said)), cfg.timeoutSeconds(name));
                     LOG.info("[tachyon] {} used {} {}: {}", name, call.name(), call.args(), result);
                     JsonObject tool = new JsonObject();
                     tool.addProperty("role", "tool");
@@ -175,9 +225,11 @@ final class Brain {
             turn.addAll(msgs.subList(from, msgs.size()));
             history.addLast(new Turn(turn));
             while (history.size() > HISTORY) history.removeFirst();
+            failure = null;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (Exception e) {
+            failure = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             LOG.warn("[tachyon] {} could not think", name, e);
             String why = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             server.execute(() -> tell(said.who(), name + " could not think: " + why));
@@ -191,7 +243,7 @@ final class Brain {
      * turn that ran this may not count as done yet, and it would wait for nothing.
      */
     private void next() {
-        Said w = waiting;
+        Said w = waiting != null ? waiting : notices.pollFirst();
         waiting = null;
         if (w != null && p.body.isAlive() && !p.body.isRemoved() && !config().url(p.name()).isEmpty()) {
             thinking = THINK.submit(() -> think(w));
@@ -210,6 +262,22 @@ final class Brain {
     }
 
     // --- what the model is told -------------------------------------------------------
+
+    /**
+     * What the model is told of the bot as a turn starts: its instructions (the tools'
+     * and the abilities' lines after the mod's own), its state, and the tools it is
+     * offered. On the server's thread.
+     */
+    private Start start(Said said) {
+        List<Tool> offered = Abilities.tools().offered(p);
+        List<String> rules = new ArrayList<>();
+        for (Tool t : offered) {
+            if (t.rule() != null) rules.add(t.rule());
+        }
+        Abilities.rules(p, rules);
+        String prompt = rules.isEmpty() ? prompt() : prompt() + "\n" + String.join("\n", rules);
+        return new Start(prompt, state(said), Abilities.tools().json(offered));
+    }
 
     private String prompt() {
         return "You are " + p.name() + ", a player in a Minecraft world. You live on the server: a mod runs "
@@ -240,153 +308,52 @@ final class Brain {
             s.append("; ").append(said.name()).append(" is ").append(Math.round(speaker.distanceTo(b)))
                     .append(" blocks ").append(direction(b.getX(), b.getZ(), speaker.getX(), speaker.getZ()));
         }
+        List<String> parts = new ArrayList<>();
+        Abilities.state(p, parts);
+        for (String part : parts) s.append("; ").append(part);
         return s.toString();
     }
 
     // --- the tools ----------------------------------------------------------------------
 
-    private static final JsonArray TOOLS = new JsonArray();
+    // The tools are the abilities' (see Abilities): what the model is sent, and what runs.
 
-    static {
-        tool("come_here", "Walk to the player who is speaking to you, once.");
-        tool("follow", "Keep walking after a player until told to stop.",
-                "player:string:Their name; leave it out for the one speaking to you:optional");
-        tool("go_to", "Walk to a place.", "x:integer:X", "y:integer:Y", "z:integer:Z");
-        tool("stop", "Stop what you are doing and stand still.");
-        tool("hunt", "Hunt a kind of mob with your best weapon and pick up what it drops.",
-                "mob:string:The mob, as Minecraft names it: cow, pig, sheep, chicken, zombie...",
-                "count:integer:How many to kill; 0 for every one around:optional");
-        tool("clear", "Break every block in a box, top layer first, with your best tools.",
-                "x1:integer:A corner's X", "y1:integer:A corner's Y", "z1:integer:A corner's Z",
-                "x2:integer:The other corner's X", "y2:integer:The other corner's Y", "z2:integer:The other corner's Z");
-        tool("status", "Your health, food, what you are doing and what you carry.");
-        tool("look_around", "Who and what is near you: players, mobs, things lying on the ground.");
-    }
-
-    /** @param params "name:type:description" or "name:type:description:optional" */
-    private static void tool(String name, String description, String... params) {
-        JsonObject props = new JsonObject();
-        JsonArray required = new JsonArray();
-        for (String param : params) {
-            String[] f = param.split(":", 4);
-            JsonObject prop = new JsonObject();
-            prop.addProperty("type", f[1]);
-            prop.addProperty("description", f[2]);
-            props.add(f[0], prop);
-            if (f.length < 4) required.add(f[0]);
-        }
-        JsonObject schema = new JsonObject();
-        schema.addProperty("type", "object");
-        schema.add("properties", props);
-        schema.add("required", required);
-        JsonObject fn = new JsonObject();
-        fn.addProperty("name", name);
-        fn.addProperty("description", description);
-        fn.add("parameters", schema);
-        JsonObject t = new JsonObject();
-        t.addProperty("type", "function");
-        t.add("function", fn);
-        TOOLS.add(t);
-    }
-
-    /** A tool the model called, run as an order; what came of it, in words for the model. On the server's thread. */
-    private String run(Llm.ToolCall call, Said said) {
-        JsonObject a = call.args();
-        BotPlayer b = p.body;
+    /**
+     * A tool the model called, started as an order; what comes of it, in words for the
+     * model. On the server's thread: most answer here and now, a later one elsewhere.
+     */
+    private CompletableFuture<String> run(Llm.ToolCall call, Said said) {
         ServerPlayer speaker = said.who() == null ? null : server.getPlayerList().getPlayer(said.who());
+        return Abilities.tools().start(call.name(), new Tool.Call(p, call.args(), speaker, said.name(), by(said)));
+    }
+
+    /**
+     * What a tool came to, waited for here, on the brain's thread: at once for most; a
+     * later one (a search on a thread of its own) as long as a model's answer may take.
+     */
+    private static String result(CompletableFuture<String> started, int seconds) throws InterruptedException {
         try {
-            switch (call.name()) {
-                case "come_here" -> {
-                    if (speaker == null) return "nobody to go to: the one speaking is not in the game";
-                    Bots.orderGoto(p, speaker.blockPosition(), by(said));
-                    return "started walking to " + said.name() + ", " + Math.round(speaker.distanceTo(b))
-                            + " blocks away; not there yet";
-                }
-                case "follow" -> {
-                    String who = a.has("player") ? a.get("player").getAsString() : said.name();
-                    ServerPlayer leader = server.getPlayerList().getPlayerByName(who);
-                    if (leader == null) return "no player " + who + " in the game";
-                    if (leader == b) return "you cannot follow yourself";
-                    Bots.orderFollow(p, leader, by(said));
-                    return "following " + who;
-                }
-                case "go_to" -> {
-                    BlockPos to = new BlockPos(a.get("x").getAsInt(), a.get("y").getAsInt(), a.get("z").getAsInt());
-                    Bots.orderGoto(p, to, by(said));
-                    return "started walking to " + pos(to) + ", " + Math.round(Math.sqrt(to.distToCenterSqr(b.position())))
-                            + " blocks away; not there yet";
-                }
-                case "stop" -> {
-                    Bots.orderStop(p);
-                    return "standing still";
-                }
-                case "hunt" -> {
-                    String mob = a.get("mob").getAsString().toLowerCase(Locale.ROOT).trim().replace(' ', '_');
-                    ResourceLocation id = ResourceLocation.tryParse(mob.contains(":") ? mob : "minecraft:" + mob);
-                    EntityType<?> type = id == null ? null : BuiltInRegistries.ENTITY_TYPE.getOptional(id).orElse(null);
-                    if (type == null) return "there is no mob called " + mob;
-                    if (type == EntityType.PLAYER) return "you never hunt players";
-                    int count = a.has("count") ? Math.max(0, a.get("count").getAsInt()) : 0;
-                    Bots.orderHunt(p, type, id.getPath(), count, by(said));
-                    return "started hunting " + id.getPath() + (count > 0 ? ", " + count : ", every one around") + ", "
-                            + (Hunt.damage(b.getMainHandItem()) > 0 ? "with " + item(b.getMainHandItem()) : "bare-handed (no weapon)")
-                            + "; none killed yet, it takes a while";
-                }
-                case "clear" -> {
-                    BlockPos c1 = new BlockPos(a.get("x1").getAsInt(), a.get("y1").getAsInt(), a.get("z1").getAsInt());
-                    BlockPos c2 = new BlockPos(a.get("x2").getAsInt(), a.get("y2").getAsInt(), a.get("z2").getAsInt());
-                    String refused = Bots.orderClear(p, c1, c2, by(said));
-                    return refused != null ? refused : "started clearing " + pos(c1) + " to " + pos(c2)
-                            + "; nothing broken yet, it takes a while";
-                }
-                case "status" -> {
-                    return "health " + Math.round(b.getHealth()) + "/20, food " + b.getFoodData().getFoodLevel()
-                            + "/20, doing: " + p.doing + "; carrying: " + inventory(b);
-                }
-                case "look_around" -> {
-                    return around(b);
-                }
-                default -> {
-                    return "there is no tool " + call.name();
-                }
-            }
-        } catch (RuntimeException e) {
-            return "that could not be done: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+            return started.get(seconds, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            started.cancel(true);
+            return "that could not be done: it took too long";
+        } catch (ExecutionException e) {
+            return Tools.failed(e);
         }
     }
 
-    /** An order from the chat: its brain tells how it went (from the console: nobody to tell). */
+    /**
+     * An order from the chat, or from a notice: its brain tells how it went (from the
+     * console, or for a bot nobody owns: nobody to tell).
+     */
     private static Bots.Order by(Said said) {
         return said.who() == null ? null : new Bots.Order(said.who(), said.name(), true);
     }
 
-    private static String around(BotPlayer b) {
-        StringBuilder s = new StringBuilder();
-        List<String> players = new ArrayList<>();
-        for (Player pl : b.level().players()) {
-            if (pl == b || pl.distanceTo(b) > 64) continue;
-            players.add(pl.getGameProfile().getName() + " " + Math.round(pl.distanceTo(b)) + " blocks "
-                    + direction(b.getX(), b.getZ(), pl.getX(), pl.getZ()));
-            if (players.size() >= 8) break;
-        }
-        s.append("players: ").append(players.isEmpty() ? "none within 64" : String.join(", ", players));
-        Map<String, int[]> mobs = new LinkedHashMap<>();
-        for (LivingEntity e : b.level().getEntitiesOfClass(LivingEntity.class, b.getBoundingBox().inflate(24),
-                e -> !(e instanceof Player) && e.isAlive())) {
-            String name = BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).getPath();
-            int[] c = mobs.computeIfAbsent(name, k -> new int[]{0, Integer.MAX_VALUE});
-            c[0]++;
-            c[1] = Math.min(c[1], Math.round(e.distanceTo(b)));
-        }
-        List<String> m = new ArrayList<>();
-        mobs.forEach((k, v) -> m.add(k + " x" + v[0] + " (nearest " + v[1] + ")"));
-        s.append("; mobs within 24: ").append(m.isEmpty() ? "none" : String.join(", ", m));
-        int items = b.level().getEntitiesOfClass(ItemEntity.class, b.getBoundingBox().inflate(16)).size();
-        s.append("; things lying on the ground within 16: ").append(items);
-        return s.toString();
-    }
+    // --- words for the model, the tools' too --------------------------------------------
 
-    private static String inventory(BotPlayer b) {
+    /** What it carries, by name and count: 12 kinds at most. */
+    static String inventory(BotPlayer b) {
         Map<String, Integer> count = new LinkedHashMap<>();
         for (ItemStack st : b.getInventory().items) {
             if (!st.isEmpty()) count.merge(st.getHoverName().getString(), st.getCount(), Integer::sum);
@@ -397,16 +364,16 @@ final class Brain {
         return String.join(", ", out.size() > 12 ? out.subList(0, 12) : out) + (out.size() > 12 ? ", ..." : "");
     }
 
-    private static String item(ItemStack st) {
+    static String item(ItemStack st) {
         return st.isEmpty() ? "nothing" : st.getHoverName().getString();
     }
 
-    private static String pos(BlockPos p) {
+    static String pos(BlockPos p) {
         return p.getX() + " " + p.getY() + " " + p.getZ();
     }
 
     /** Where (x2, z2) is from (x1, z1), in the eight winds: north is -Z. */
-    private static String direction(double x1, double z1, double x2, double z2) {
+    static String direction(double x1, double z1, double x2, double z2) {
         double dx = x2 - x1, dz = z2 - z1;
         if (Math.abs(dx) < 1 && Math.abs(dz) < 1) return "here";
         String ns = dz < -Math.abs(dx) / 2.4 ? "north" : dz > Math.abs(dx) / 2.4 ? "south" : "";
