@@ -615,7 +615,12 @@ public final class Bots {
     }
 
     static void orderHunt(Bot p, EntityType<?> prey, String name, int count, Order by) {
-        orderJob(p, new Hunt(prey, name, count), "hunting " + name, by);
+        orderHunt(p, new Hunt(Prey.of(prey), count, false, null), by);
+    }
+
+    /** A hunt as Hunting makes it: kinds of mob, how many, which way to look (see {@link Hunt}). */
+    static void orderHunt(Bot p, Hunt hunt, Order by) {
+        orderJob(p, hunt, hunt.status(), by);
     }
 
     /** @return why not (a box too big), or null once the order is given */
@@ -1383,6 +1388,12 @@ public final class Bots {
     static void plan(Bot p, BlockPos to, double near, String doing) {
         Route.Point b = new Route.Point(to.getX(), to.getY(), to.getZ());
         plan(p, to, near > 0 ? world -> Route.Meta.near(ground(world, b), near) : null, doing);
+    }
+
+    /** The same ring, searched with options of its own (a chase's longer fall: see Hunt.chase). */
+    static void plan(Bot p, BlockPos to, double near, Route.Options wanted, String doing) {
+        Route.Point b = new Route.Point(to.getX(), to.getY(), to.getZ());
+        plan(p, to, world -> Route.Meta.near(ground(world, b), near), wanted, doing);
     }
 
     /**

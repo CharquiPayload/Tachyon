@@ -53,8 +53,17 @@ final class Tool {
      * @param order       for whatever the tool starts: whoever gave it is told, in the
      *                    bot's words, when it is over (null: nobody to tell, as from the
      *                    console)
+     * @param words       what {@code speakerName} said this turn; null when nobody spoke (news
+     *                    of an order, a notice): then the speaker is only whom the bot
+     *                    answers, and a tool that may do something only because a person
+     *                    asked (eat a banned food) knows nobody did
      */
-    record Call(Bots.Bot bot, JsonObject args, ServerPlayer speaker, String speakerName, Bots.Order order) {
+    record Call(Bots.Bot bot, JsonObject args, ServerPlayer speaker, String speakerName, Bots.Order order, String words) {
+
+        /** A call in a turn where nobody spoke: a test's, or a tool's that does not care. */
+        Call(Bots.Bot bot, JsonObject args, ServerPlayer speaker, String speakerName, Bots.Order order) {
+            this(bot, args, speaker, speakerName, order, null);
+        }
     }
 
     /** A tool's work, answered at once, on the server's thread. */

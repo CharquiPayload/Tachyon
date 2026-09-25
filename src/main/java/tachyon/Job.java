@@ -52,9 +52,10 @@ abstract class Job {
 
     /**
      * The best in the inventory by {@code score} into the hand: selected if it is in the
-     * hotbar, swapped into the selected slot if it is not. Nothing better than what is
-     * held, nothing changes. For whoever has the hands: a job through {@link #hold}, a
-     * reflex that holds them directly.
+     * hotbar, brought up from the backpack if it is not, into the hotbar slot Masurium's
+     * rule gives up ({@link Gear#toHand}). Nothing better than what is held, nothing
+     * changes. For whoever has the hands: a job through {@link #hold}, a reflex that holds
+     * them directly.
      */
     static void wield(Bots.Bot p, ToDoubleFunction<ItemStack> score) {
         Inventory inv = p.body.getInventory();
@@ -67,14 +68,7 @@ abstract class Job {
                 best = i;
             }
         }
-        if (best == inv.selected) return;
-        if (Inventory.isHotbarSlot(best)) {
-            inv.selected = best;
-        } else {
-            ItemStack held = inv.getItem(inv.selected);
-            inv.setItem(inv.selected, inv.getItem(best));
-            inv.setItem(best, held);
-        }
+        Gear.toHand(p, best);
     }
 
     /** A step straight ahead falls this far at most: past it, a player takes damage. */

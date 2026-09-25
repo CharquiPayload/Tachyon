@@ -52,6 +52,14 @@ final class BotPlayer extends ServerPlayer {
             serverLevel().getChunkSource().move(this);
         }
         if (pilot != null) pilot.run();
+        // Using an item (a bite, a bow drawn), a player walks at a fifth of its pace and
+        // cannot sprint: its own client slows its keys (LocalPlayer.aiStep), and the server,
+        // which trusts the client's movement, never does. A bot has no client: the same, here.
+        if (isUsingItem() && !isPassenger()) {
+            zza *= 0.2f;
+            xxa *= 0.2f;
+            setSprinting(false);
+        }
         super.tick();
         doTick();
         Bots.ticked(System.nanoTime() - started);

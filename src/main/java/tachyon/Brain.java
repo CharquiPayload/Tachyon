@@ -375,7 +375,8 @@ final class Brain {
      */
     private CompletableFuture<String> run(Llm.ToolCall call, Said said, Set<String> offered) {
         ServerPlayer speaker = said.who() == null ? null : server.getPlayerList().getPlayer(said.who());
-        return Abilities.tools().start(call.name(), new Tool.Call(p, call.args(), speaker, said.name(), by(said)), offered);
+        String words = said.kind() == Kind.WORDS ? said.text() : null;
+        return Abilities.tools().start(call.name(), new Tool.Call(p, call.args(), speaker, said.name(), by(said), words), offered);
     }
 
     /**

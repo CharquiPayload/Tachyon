@@ -11,9 +11,10 @@ in the chat.
 One jar, in the server's `mods/` folder. Players join without installing
 anything, and no bot needs a Minecraft account or a game client of its own.
 
-**Early days (0.2.0).** It walks, follows, hunts, clears areas and talks; it comes
-back when it dies and when the server restarts; its settings have an in-game
-menu; most of what a player does is still to come.
+**Early days (0.2.0).** It walks, follows, hunts, clears areas and talks; it
+fights with a sword and a bow, wears armor, eats, and tosses what it does not
+need; it comes back when it dies and when the server restarts; its settings have
+an in-game menu; most of what a player does is still to come.
 
 ## Installing
 
@@ -32,9 +33,12 @@ menu; most of what a player does is still to come.
 | `/tachyon goto <who> <x y z>` | owner, operators | walks there |
 | `/tachyon follow <who> <player>` | owner, operators | walks after them until stopped |
 | `/tachyon stop <who>` | owner, operators | stops whatever it does |
-| `/tachyon hunt <who> <mob> [count]` | owner, operators | kills that many of a mob each (every one around without a count) and picks up the drops |
+| `/tachyon hunt <who> <mob> [count]` | owner, operators | kills that many of a mob each and picks up the drops; without a count, every one it finds ([Hunting](#hunting-and-killing)) |
+| `/tachyon kill <who> <mob> [count]` | owner, operators | kills that many of a mob each with its bow, by sword without one; 1 without a count, 0 for every one it sees |
 | `/tachyon clear <who> <from> <to>` | owner, operators | breaks every block in the box, top layer first, with the right tools |
 | `/tachyon tell <who> <words>` | owner, operators | says something to a bot, as if in the chat |
+| `/tachyon food <who> [ban\|allow\|default <food>]` | owner, operators | the food it does not eat on its own ([Eating](#eating)), or a change to it |
+| `/tachyon trash <who> [add\|remove\|default <item>]` | owner, operators | what it tosses as trash ([Tossing](#tossing-and-trash)), or a change to it |
 | `/tachyon config [<who>]` | owner, operators | opens the [config menu](#the-config-menu): your bots' settings (and, for operators, the server's defaults) in a chest; with `<who>`, that one bot's |
 | `/tachyon settings <who>` | owner, operators | its [settings](#settings): each one's value, and where it comes from |
 | `/tachyon set <who> <key> <value>` | owner, operators (some settings: operators only) | changes one of its settings; `default` as the value goes back to the server's default |
@@ -64,8 +68,10 @@ model someone pays for.
 
 Name it in the chat: `Ada, come here`, `Ada hunt three cows`, `what do you see,
 Ada?`. It answers in the chat, in the language it was spoken to in, and does what
-it can with its tools: come to you, follow, go somewhere, stop, hunt, clear a
-box, tell how it is, look around. When something it was asked is over (done, or
+it can with its tools: come to you, follow, go somewhere, stop, hunt, kill with
+its bow, hit what is near, clear a box, put something in its hand, put on or take
+off armor, eat, toss things (to you, too), change its trash list, tell how it is,
+look around. When something it was asked is over (done, or
 given up), it says so, in its words. Each player can speak to bots a few times a
 minute (`per_minute`).
 
@@ -100,6 +106,96 @@ they attack any player near, bots too). With it false a bot counts as any player
 does, and the night is skipped only if enough bots sleep too. It is
 the operators' to change, since it changes the night for everyone.
 
+## Fighting, gear and food
+
+A bot's hands are a player's: it hits with a player's reach, only what it sees,
+and waits for the attack to charge; it draws a bow for as long as a player does,
+and its arrows fly, hurt and run out as a player's do; it eats for as long as a
+player takes to, walking at a fifth of its pace meanwhile, as a player does with
+a bow drawn or food at its mouth.
+
+### Weapons and armor
+
+Before every hit it takes the best weapon it carries, from its hotbar or brought
+up from its backpack: a real weapon (a sword, an axe, a trident, a mace) before
+any tool, then the most damage per second, from the item's own numbers (a mod's
+weapons count as they hit). A weapon brought up takes the hotbar slot of the
+weakest weapon there, if the new one is better, else an empty one, else that of
+a small stack of something of little use.
+
+With `dress_alone` (on by default) it puts on, every 10 seconds, any armor it
+carries that protects better than what it wears (armor points, then toughness),
+the old piece going where the new one was; a piece with the curse of binding
+stays on. Its brain can ask it to put on the best it carries, or one piece (even
+a worse one), or take one off into its backpack.
+
+### Hunting and killing
+
+**Hunting** is chasing and killing mobs of one or more kinds (`cow,pig`) with its
+best weapon, and picking up what they drop within 12 blocks (not its trash, not
+what does not fit, not an item it stood on for 2 s without it going in). It sees
+128 blocks around, the nearest first, and several hunters spread over a herd.
+When it sees none it goes out looking: in legs of 48 blocks the way it was told
+(or faces), turning right when three legs in a row get it nowhere, for 300 blocks
+or 3 minutes at most, twice an errand. Told a count, it stops once that many are
+dead or none is found; without one, after half a minute without seeing more.
+From its brain it hunts 8 at most, and 8 when not told how many. It never hunts
+a player, a tamed mob or a named one, nor a creeper (in melee they blow up), and
+it stops below 6 health. Every way a hunt ends says how many it killed.
+
+**Killing** (`kill`) is taking mobs down with its bow, from 10 to 25 blocks away
+and in sight; farther or out of sight it walks until it has range and sight, and
+what is within reach it finishes with its weapon. It aims where the arrow will
+meet the target: led by how the target moves, and raised for the drop, found by
+flying the arrow as the game does. It never shoots from water, at a breeze or an
+enderman (arrows are no use against them), through a block in the arc, or with a
+player on top of the target or in the line of fire. After each arrow it watches
+the shot; three that do no harm and it leaves that target alone, as does every
+other bot, until the target hurts one of them. It does not pick up what they
+drop. Without a bow or arrows, or against a breeze or an enderman, it kills by
+sword instead (never a creeper). It stops below 6 health, and when it runs out
+of arrows.
+
+**An attack** (`attack`, from its brain) is a few hits, 3 unless told, at what is
+within its reach now: the nearest hostile mob, or what it is told to hit. It is
+not an order: the bot goes on with what it was doing. Out of reach, it says where
+the nearest one is.
+
+**Players** are never prey, unless the operators turn on its `hunt_players`: then
+its brain's `kill` and `attack` go after a player it is told to by name (never
+one in creative or spectator).
+
+### Eating
+
+Its brain can ask it to eat: what it is told to, or, without a name, the best
+food it may eat on its own (what fills most of the hunger it lacks, then what
+keeps it fed longest), brought up from its backpack if need be. On its own it
+never eats food that harms (rotten flesh, spider eyes, raw chicken, pufferfish,
+a poisonous potato: any whose effects are harmful), a suspicious stew or a chorus
+fruit, nor the food on its banned list: the golden apples, unless its owner or an
+operator changes that with `/tachyon food <who> ban|allow|default <food>`. Its
+brain reads the list and cannot change it; it eats a banned food only when the
+person speaking to it that moment asked for it by name.
+
+### Tossing and trash
+
+Its brain can ask it to toss something, all of it or a count, on the ground or to
+someone (it turns to them first); it says how many really went. What it wears is
+not tossed this way. **What a bot tosses, that bot never picks up again** (anyone
+else does, as usual), for the 5 minutes the item lies there; what it drops as it
+dies it does get back.
+
+Its **trash** is what it tosses by itself when its backpack is full (36 slots
+taken), and then only: cobblestone, cobbled deepslate, tuff, granite, diorite,
+andesite, dirt and gravel, to start with. With `trash_at_once` it tosses its
+trash as soon as it picks it up. Either way it keeps one stack of each trash
+block it can build with (the one in its hand, else the biggest), and never tosses
+what it is using. Its brain may change the list (it concerns only what it
+carries), and so may its owner and operators with `/tachyon trash`. Its brain is
+told when it tossed its trash to make room, or found its backpack full with
+nothing to toss (once in 10 minutes at most: every word to it is a paid call to a
+model).
+
 ## Settings
 
 Settings are switches and numbers that say how a bot goes about what it does.
@@ -115,6 +211,9 @@ one.
 | `come_back` | Come back after a restart | Life | basic | owner, operators | `true` | whether it comes back by itself, where it was, when the server starts again |
 | `ignore_for_sleep` | Left out of sleeping | Night | basic | operators | `true` | whether the players skip the night without it (it does not count for the sleeping percentage) and no phantoms spawn because of it |
 | `brain_lite` | Lite brain | Brain | advanced | owner, operators | `false` | whether its brain is sent only the core tools, for a small local model ([The brain](#the-brain)) |
+| `dress_alone` | Put on better armor | Gear | basic | owner, operators | `true` | whether it puts on better armor it carries by itself (it looks every 10 s) |
+| `trash_at_once` | Toss trash at once | Gear | advanced | owner, operators | `false` | whether it tosses its trash as soon as it picks it up; false: only when its backpack is full ([Tossing](#tossing-and-trash)) |
+| `hunt_players` | Fight players by name | Fighting | advanced | operators | `false` | whether its brain's attack and kill may go after a player named to them |
 
 A bot's value is the first of four layers that has one:
 
@@ -197,8 +296,8 @@ Some examples:
 
 The model has to support tool calling. A small local model chooses badly among
 many tools: `/tachyon set <who> brain_lite true` sends it only the core ones
-(walking, stopping, hunting, clearing, how it is, what is around; for now that is
-every tool there is, and the tools still to come will not all be core).
+(walking, stopping, hunting, clearing, how it is, what is around), and not those
+for killing, attacking, its hands, armor, food and tossing.
 
 Any of `url`, `model`, `key` and `timeout` can be set for one bot only, as
 `<name>.<key>` (`Ada.model=...`). The key is read from this file and nowhere
@@ -219,7 +318,11 @@ VMs). A tick has 50 ms (20 a second) before the server lags:
 | 100 | clearing a 40×3×40 block (4,800 blocks) | 8–12 ms | 46 ms at the busiest | 3.5–4.5 ms |
 
 About 0.02–0.06 ms of the tick and about 2 MB of memory per bot. Route searches
-and the model's answers run on threads of their own, never on the tick. A busy
+and the model's answers run on threads of their own, never on the tick. What a
+bot does by itself (armor looked at every 10 s, trash on a pickup, a bite or a few
+hits under way) costs next to nothing while there is nothing to do: with 100 idle
+bots, about 0.2 µs a bot a tick, and no difference `/tachyon stats` can tell (windows
+with them and without them in turn, on one server: 5.12 and 5.18 ms a tick). A busy
 modpack leaves less room than a plain server: measure yours with
 `/tachyon stats` and `/tick query`.
 

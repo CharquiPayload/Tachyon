@@ -41,10 +41,12 @@ class ToolsTest {
      * calls. New tools may come among them; these stay as they are, unless changed on
      * purpose, and the file with them.
      *
-     * <p>Changed once, on purpose: 0.1.0 sent hunt's {@code mob} as optional, and its
-     * description cut at a colon ("The mob, as Minecraft names it"), since its tools were
+     * <p>Changed twice, on purpose. First: 0.1.0 sent hunt's {@code mob} as optional, and
+     * its description cut at a colon ("The mob, as Minecraft names it"), since its tools were
      * written as "name:type:description" and the colon split the description. It is sent
-     * now required, and whole. The rest is what 0.1.0 sent, to the byte.
+     * required, and whole. Then hunt became Masurium's: several kinds at once, 8 at most and
+     * 8 when not told, going out to look when none is in sight, and which way ({@code toward}).
+     * The rest is what 0.1.0 sent, to the byte.
      */
     @Test
     @DisplayName("the core tools are sent to the model as the file has them, to the byte and in their order")
