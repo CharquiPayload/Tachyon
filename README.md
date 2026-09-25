@@ -12,7 +12,9 @@ One jar, in the server's `mods/` folder. Players join without installing
 anything, and no bot needs a Minecraft account or a game client of its own.
 
 **Early days (0.3.0).** It walks, follows, hunts, gathers materials, clears
-areas and talks; it fights with a sword and a bow, wears armor, eats, and tosses
+areas and talks; it goes far, round what is in the way and through gates,
+bridging gaps and climbing walls with blocks it carries, and digging through
+when allowed; it fights with a sword and a bow, wears armor, eats, and tosses
 what it does not need, and never takes a piece of a player's build unless a
 person orders it to; by itself it fights back, shoots or runs from creepers, backs off when
 badly hurt, comes up for air, digs itself out when buried and eats when hungry;
@@ -43,6 +45,7 @@ is still to come. What is done and what comes next:
 | `/tachyon gather <who> <block> [count] [item]` | owner, operators | breaks blocks of that kind in the open and picks up what they drop, until it has `count` more (16 without one) of `item` (without one, blocks broken); never a player's build ([Gathering](#gathering)) |
 | `/tachyon gather <who> seeds [count]` | owner, operators | cuts grass until it has `count` more wheat seeds (16 without one) |
 | `/tachyon clear <who> <from> <to>` | owner, operators | breaks every block in the box, top layer first, with the right tools: whatever is there, builds too, since a person gave the order |
+| `/tachyon break <who> [allow\|forbid\|default <block>]` | owner, operators | the blocks it may break on its own to make its way ([Getting there](#getting-there)), or a change to them |
 | `/tachyon tell <who> <words>` | owner, operators | says something to a bot, as if in the chat |
 | `/tachyon food <who> [ban\|allow\|default <food>]` | owner, operators | the food it does not eat on its own ([Eating](#eating)), or a change to it |
 | `/tachyon trash <who> [add\|remove\|default <item>]` | owner, operators | what it tosses as trash ([Tossing](#tossing-and-trash)), or a change to it |
@@ -82,7 +85,7 @@ it can with its tools: come to you, follow, go somewhere, stop, hunt, kill with
 its bow, hit what is near, gather a material ("get me some dirt", "chop 20
 logs", "I need seeds"), clear a box it was asked to clear, put something in its
 hand, put on or take off armor, eat, toss things (to you, too), change its trash
-list, tell how it is, look around, tell where and how it last died. Its brain's
+list, tell how it is, look around, tell where and how it last died, tell what it may break on its own. Its brain's
 `clear` is for an area someone asked to have cleared, never to get a material,
 and it refuses a box that holds blocks players placed: then it says a person can
 order it with `/tachyon clear`. When something it was asked is
@@ -122,6 +125,64 @@ hit first, in the 20 s before (with `hunt_players`, its brain may attack a playe
 named to it; with `defend_from_players`, it fights back), are left out: that
 fight is its own. So is a sword's sweep that caught it while the swing was at
 something else (two bots side by side against zombies catch each other's).
+
+## Getting there
+
+`goto`, and its brain's `go_to` and `come_here`, are a trip: near, or hundreds of
+blocks off, walked a leg at a time as Masurium's bots walk one, round what is in
+the way, and told back once it is over.
+
+- **Where.** A tile nobody can stand on is taken as the ground under it, 8 blocks
+  down at most, else as a tile beside it: "go to the chest" ends beside the chest,
+  not on it; only with neither, as the tile over it (a dirt path's own cell, read
+  off where a player stands on it). With building allowed, a tile in the air is
+  where it goes: it builds up to it. `come_here` goes to the tile the player stands
+  on, on a dirt path or farmland too.
+- **Far.** Each leg is the route a search finds, or the stretch of it that gets
+  closest; the legs after the first aim at the place's column first, at any
+  height, and only then at the tile (a player who said where they stood on a
+  hilltop is reached up the hill, not by a tower toward that tile). It is there
+  within 1.6 blocks, and 2 up or down. Three legs in a row that end no closer, by
+  a block, and it stops, saying so with the numbers: `stuck at 120 64 -30, 23
+  blocks from 140 70 -30: the way is blocked by oak_log and I have no permission
+  to break it; 4 legs, 6 blocks placed`. Legs that find no way at all it searches
+  again for 5 s (a mob moves off, chunks load), then says why.
+- **Doors and gates.** Wooden doors and fence gates it opens by hand, and closes
+  behind it once it is through; iron doors are walls.
+- **Falls.** As long a fall as its health allows: 3 blocks, a block more for
+  every 4 health, 12 at most; into water from any height.
+- **Water.** It swims, and keeps its head above it; a lake is swum across, never
+  bridged. On open water more than 48 blocks from the place it swims straight on
+  along the surface, without a search, and from a shore with water ahead it walks
+  in and swims on.
+- **Stuck.** Six jumps in a row without getting on (a berry bush only slows it,
+  and does not count), and the tile it could not get into is left out of its
+  searches for 90 s, so the next one finds another way; with no route from
+  there, it walks to a tile 2 to 5 blocks aside and searches again from it. Three
+  times, and the leg is over.
+- **Building** (`build_to_move`, on). With no way on foot, it places a block under
+  the next tile to cross a gap (straight on, never over water, which it swims), or
+  under its feet at the top of a jump to climb, from a player's reach and as a
+  player places one: sneaking, so a chest it builds against is not opened. Only
+  cheap blocks it carries: dirt, grass blocks, cobblestone, stone, deepslate,
+  andesite, diorite, granite, tuff, calcite, netherrack, blackstone, basalt, sand,
+  gravel and planks (and the rest of those families, by the game's tags); carrying
+  none, it plans no building. The path finder charges a bridge block 23 ticks and a
+  tower block 28, against 4.6 for a step: it builds only where walking, swimming
+  and going round do not get it there. It does not pick them up again.
+  `build_while_following` (on) lets it build to keep up with whom it follows too.
+- **A hole.** Shut in on all four sides with no way out on foot and building off,
+  it climbs out on a tower under its own feet, 8 blocks at most, if it carries
+  blocks and there is no roof: the one block it places with `build_to_move` off.
+- **Digging through** (`break_to_advance`, off). With no way on foot, a route may
+  go through blocks on its break list, which it digs (the head's block, then the
+  feet's) with the best tool it carries, in the time the block takes: straight
+  on, on solid ground, never into lava. The list is what it may break on its own:
+  cobblestone, dirt, grass blocks and stone, to start with. Its owner or an
+  operator changes it (`/tachyon break <who> allow|forbid|default <block>`); its
+  brain reads it (`break_permissions`) and cannot change it. It is looked at again
+  on each block as it is dug, and it rules only what the bot breaks on its own to
+  make its way: what it is told to break (`clear`) never needed it.
 
 ## Death, restarts and the night
 
@@ -442,6 +503,9 @@ one.
 | key | label (in the menu) | group | level | who changes it | default | what |
 |---|---|---|---|---|---|---|
 | `sprint` | Sprint when walking | Walking | basic | owner, operators | `on` | It sprints when it walks: on flat ground, and not on the last steps. |
+| `build_to_move` | Build to get there | Walking | basic | owner, operators | `on` | When there is no way on foot, it places blocks it carries (dirt, stone, planks...) to get where it goes: a bridge over a gap, a tower to climb. ([Getting there](#getting-there)) |
+| `build_while_following` | Build when following | Walking | advanced | owner, operators | `on` | When there is no way on foot, it also builds bridges and towers with blocks it carries to keep up with whom it follows. |
+| `break_to_advance` | Dig through to get there | Walking | basic | owner, operators | `off` | When there is no way on foot, it digs through blocks on its break list (/tachyon break) to get where it goes. ([Getting there](#getting-there)) |
 | `respawn` | Come back after dying | Life | basic | owner, operators | `on` | When it dies, it comes back by itself 2 seconds later, 5 times in 5 minutes at most. When it is off, a bot that dies leaves the game. |
 | `come_back` | Come back after a restart | Life | basic | owner, operators | `on` | When the server starts again, it comes back by itself, where it was. |
 | `recover_items` | Go back for its things | Life | basic | owner, operators | `on` | Once it is back from a death, it goes back for what it dropped: 2 tries within 6 minutes of the death at most, and never after lava, the void or drowning. |
@@ -621,6 +685,29 @@ out looking took 6 to 10 ms each on their thread, 3 waiting at most. What was
 added to a bot standing idle (a look once a second for its feet inside a block) is
 a block read a second. A busy modpack leaves less room than a plain server:
 measure yours with `/tachyon stats` and `/tick query`.
+
+Getting there, as it is now, against 0.3.0 (the same 6-core VM, 100 bots told at
+once, the bots' share from `/tachyon stats` in samples of 10 s, 20 s standing;
+another test server ran on the VM meanwhile, so a sample alone may be 0.6 ms off
+either way):
+
+| 100 bots | 0.3.0 | now |
+|---|---|---|
+| standing (12 samples each, the builds taking turns) | 3.0–4.2 ms, 3.7 on average | 2.5–4.5 ms, 3.9 on average |
+| to a place 325 blocks off, over flat stone | all there in 60–70 s; 4.8 ms, 100 searches, 179,000 tiles | all there in 70 s; 4.6 ms, the same searches |
+| to a place 390 blocks off, over forest, hills and a lake | 69 there in 161 s, 29 out of time on their one route, 2 stuck; 4.0 ms, 185 searches, 2.6 million tiles | all there in 161 s; 4.2 ms, 203 searches, 2.7 million tiles |
+| following a bot that goes 320 blocks | 5.4 ms | 4.9 ms |
+| over a canyon 4 wide, 16 cobblestone each | (none could) | all there in 20 s: 11 bridged it, the rest walked over their bridges; 4.4 ms |
+| through a stone wall 3 thick, a pickaxe each, `break_to_advance` on | (none could) | all there in 20 s, 42 blocks dug by 29 of them; 5.2 ms |
+| out of a fenced pen through one closed gate | (a gate was a wall) | all out in 20 s; 4.6 ms |
+
+The bots' share is the same while they walk, build or dig: a block to place or
+dig is looked at only by a bot whose route asked for one. The searches cost the
+same too; the legs after the first may look at 40,000 tiles instead of 20,000,
+and a trip searches a leg again after 90 s or when stuck, where 0.3.0 gave up.
+One bot alone: 390 blocks over forest, hills and a lake with nothing loaded
+ahead, 110 s and 3 legs; 340 blocks of open sea, 110 s, 7 of its 8 legs swum
+straight on without a search.
 
 ## Where to use it
 

@@ -56,7 +56,9 @@ final class Abilities {
             new Creepers(),
             new Retreating(),
             new Defending(),
-            new Needs());
+            new Needs(),
+            new Scaffolding(),
+            new Tunnelling());
 
     /** The brain's tools: every ability's, gathered once. The model is sent them in this order. */
     private static final Tools TOOLS = new Tools();

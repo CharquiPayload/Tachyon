@@ -67,7 +67,7 @@ final class Walking implements Ability {
         tools.add(new Tool("come_here", "Walk to the player who is speaking to you, once.", List.of(), call -> {
             ServerPlayer speaker = call.speaker();
             if (speaker == null) return "nobody to go to: the one speaking is not in the game";
-            Bots.orderGoto(call.bot(), speaker.blockPosition(), call.order());
+            Bots.orderGoto(call.bot(), Bots.standingOn(speaker), call.order());
             return "started walking to " + call.speakerName() + ", " + Math.round(speaker.distanceTo(call.bot().body))
                     + " blocks away; not there yet";
         }).core());

@@ -10,9 +10,10 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * A list of items a bot keeps in its data: the food it does not eat on its own, what it
- * tosses as trash. Every bot starts from the mod's default list, and what is changed for
- * it is kept as what was added to it and what was taken out of it, not as a whole list:
+ * A list of items (or blocks) a bot keeps in its data: the food it does not eat on its
+ * own, what it tosses as trash, the blocks it may break on its own. Every bot starts from
+ * the mod's default list, and what is changed for it is kept as what was added to it and
+ * what was taken out of it, not as a whole list:
  * a bot nobody changed follows the default of whatever version runs, and one whose owner
  * banned salmon keeps salmon banned across versions.
  *

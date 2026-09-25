@@ -9,6 +9,7 @@ import net.minecraft.tags.FluidTags;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.BubbleColumnBlock;
 import net.minecraft.world.level.block.CampfireBlock;
 import net.minecraft.world.level.block.TrapDoorBlock;
@@ -19,6 +20,7 @@ import net.minecraft.world.level.material.FluidState;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The path finder's view of the world for a bot, read OFF the server's thread.
@@ -32,8 +34,10 @@ import java.util.Map;
  * the snapshot, not the search.
  *
  * <p>What is solid, a floor, a door or a danger is decided as Masurium's client bots
- * decide it, without their memory of stuck spots and without their break whitelist,
- * which Tachyon does not have yet.
+ * decide it. Two things of the bot's own go with a snapshot, copied as it is taken, so the
+ * search thread reads them without touching the bot: the tiles it got stuck on lately
+ * ({@link #vetoing}: not stood on, except where it stands now), and the blocks it may break
+ * on its own to get through ({@link #breaking}: its break list, for a route that digs).
  */
 final class SnapshotWorld implements World, BlockGetter {
 
@@ -43,6 +47,10 @@ final class SnapshotWorld implements World, BlockGetter {
     private final int minY, height;
     private final Map<Long, Byte> cache = new HashMap<>();
     private final BlockPos.MutableBlockPos aux = new BlockPos.MutableBlockPos();
+    /** Tiles not to stand on (where the bot got stuck lately): {@link BlockPos#asLong} of each. */
+    private Set<Long> vetoed = Set.of();
+    /** The blocks it may break on its own to get through; none unless a route may dig. */
+    private Set<Block> mayBreak = Set.of();
 
     private SnapshotWorld(Map<Long, LevelChunk> chunks, int minY, int height) {
         this.chunks = chunks;
@@ -52,20 +60,55 @@ final class SnapshotWorld implements World, BlockGetter {
 
     /**
      * The loaded chunks of the box between two points, widened by {@code margin} blocks.
-     * On the server's thread only. At most {@code maxChunks} of them: a longer trip is
-     * searched a stretch at a time.
+     * On the server's thread only. At most {@code maxChunks} of them, taken in rings
+     * outward from {@code a}'s chunk (the bot's): taken row by row from a corner, a box
+     * bigger than that left out the chunks the bot stood in, which read as bedrock, and
+     * every search failed at its start. A longer trip is searched a stretch at a time.
      */
     static SnapshotWorld around(ServerLevel level, BlockPos a, BlockPos b, int margin, int maxChunks) {
         int x0 = (Math.min(a.getX(), b.getX()) - margin) >> 4, x1 = (Math.max(a.getX(), b.getX()) + margin) >> 4;
         int z0 = (Math.min(a.getZ(), b.getZ()) - margin) >> 4, z1 = (Math.max(a.getZ(), b.getZ()) + margin) >> 4;
         Map<Long, LevelChunk> found = new HashMap<>();
-        for (int cx = x0; cx <= x1 && found.size() < maxChunks; cx++) {
-            for (int cz = z0; cz <= z1 && found.size() < maxChunks; cz++) {
-                LevelChunk chunk = level.getChunkSource().getChunkNow(cx, cz);
-                if (chunk != null) found.put(ChunkPos.asLong(cx, cz), chunk);
+        int ax = a.getX() >> 4, az = a.getZ() >> 4;
+        int rings = Math.max(Math.max(ax - x0, x1 - ax), Math.max(az - z0, z1 - az));
+        take(level, found, ax, az, x0, x1, z0, z1);
+        // Each ring is walked round its edge only: the chunks inside it are taken already.
+        for (int ring = 1; ring <= rings && found.size() < maxChunks; ring++) {
+            for (int i = -ring; i <= ring && found.size() < maxChunks; i++) {
+                take(level, found, ax + i, az - ring, x0, x1, z0, z1);
+                take(level, found, ax + i, az + ring, x0, x1, z0, z1);
+            }
+            for (int i = -ring + 1; i < ring && found.size() < maxChunks; i++) {
+                take(level, found, ax - ring, az + i, x0, x1, z0, z1);
+                take(level, found, ax + ring, az + i, x0, x1, z0, z1);
             }
         }
         return new SnapshotWorld(found, level.getMinBuildHeight(), level.getHeight());
+    }
+
+    /** A chunk of the box, if loaded; none outside the box. */
+    private static void take(ServerLevel level, Map<Long, LevelChunk> found, int cx, int cz, int x0, int x1, int z0, int z1) {
+        if (cx < x0 || cx > x1 || cz < z0 || cz > z1) return;
+        LevelChunk chunk = level.getChunkSource().getChunkNow(cx, cz);
+        if (chunk != null) found.put(ChunkPos.asLong(cx, cz), chunk);
+    }
+
+    /**
+     * Tiles not to stand on: where the bot got stuck lately ({@code BlockPos.asLong} of
+     * each, a copy the search may keep). As it is taken, before the search starts.
+     */
+    SnapshotWorld vetoing(Set<Long> tiles) {
+        this.vetoed = tiles;
+        return this;
+    }
+
+    /**
+     * The blocks it may break on its own to get through, for a route that digs (a copy the
+     * search may keep). As it is taken, before the search starts.
+     */
+    SnapshotWorld breaking(Set<Block> blocks) {
+        this.mayBreak = blocks;
+        return this;
     }
 
     int chunkCount() {
@@ -107,6 +150,12 @@ final class SnapshotWorld implements World, BlockGetter {
 
     // --- World: the path finder's questions ---
 
+    /** Whether the column's chunk is in the snapshot: the rest is read as bedrock. */
+    @Override
+    public boolean known(int x, int z) {
+        return chunks.containsKey(ChunkPos.asLong(x >> 4, z >> 4));
+    }
+
     @Override
     public boolean solid(int x, int y, int z) {
         return type(x, y, z) == SOLID;
@@ -132,13 +181,45 @@ final class SnapshotWorld implements World, BlockGetter {
         return type(x, y, z) == DANGER;
     }
 
+    /**
+     * The usual, minus the tiles where the bot got stuck lately: the same search from the
+     * same place found the same route again, into the tile the body had just failed to get
+     * into six times. Masurium's stuck spots.
+     */
     @Override
     public boolean canStand(int x, int y, int z) {
+        if (!vetoed.isEmpty() && vetoed.contains(BlockPos.asLong(x, y, z))) return false;
+        return canStandWithoutVeto(x, y, z);
+    }
+
+    /**
+     * Whether one can stand here, stuck spots or not: for the tile a search starts from.
+     * Vetoing the tile the bot stands on left it unable to start any trip for 90 s.
+     */
+    boolean canStandWithoutVeto(int x, int y, int z) {
         if (!World.super.canStand(x, y, z)) return false;
         aux.set(x, y - 1, z);
         BlockState ground = read(aux);
         if (ground.is(Blocks.MAGMA_BLOCK)) return false;
         return !(ground.is(BlockTags.CAMPFIRES) && ground.getValue(CampfireBlock.LIT));
+    }
+
+    /**
+     * Whether a route may go through this block by breaking it: solid, not unbreakable
+     * (bedrock, barriers), and on the bot's break list. Asked only by a search that may dig,
+     * and only of blocks already in the way of a step.
+     */
+    @Override
+    public boolean breakable(int x, int y, int z) {
+        if (mayBreak.isEmpty() || !solid(x, y, z)) return false;
+        aux.set(x, y, z);
+        BlockState state = read(aux);
+        if (!mayBreak.contains(state.getBlock())) return false;
+        try {
+            return state.getDestroySpeed(this, aux) >= 0;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     private BlockState read(BlockPos pos) {
@@ -191,12 +272,15 @@ final class SnapshotWorld implements World, BlockGetter {
                 t = DOOR;
             }
         }
-        // Fences and walls are 1.5 tall: the cell above one is taken too.
+        // Fences and walls are 1.5 tall: the cell above one is taken too. Not above a closed
+        // fence gate, which is as tall but opens: its upper half counted as a wall left the
+        // head's tile blocked, and a gate was a wall even to a bot that opens it.
         if (t == AIR) {
             aux.set(x, y - 1, z);
             BlockState below = read(aux);
             var belowBox = below.isAir() ? null : safeShape(below, aux);
-            if (belowBox != null && !belowBox.isEmpty() && belowBox.max(Direction.Axis.Y) > 1.0) {
+            if (belowBox != null && !belowBox.isEmpty() && belowBox.max(Direction.Axis.Y) > 1.0
+                    && !below.is(BlockTags.FENCE_GATES)) {
                 t = SOLID;
             }
         }

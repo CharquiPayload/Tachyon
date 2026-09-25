@@ -51,17 +51,27 @@ do, rebuilt to run on the server, and adds things only a server can do.
   - The menu reads better: on and off, full sentences, labels in refusals,
     and which default Q goes back to.
   - A bot with gravel fallen at its feet digs itself out.
+- **Moving better.**
+  - Trips of hundreds of blocks, a leg at a time, judged as a whole: it stops
+    only when three legs in a row get it no closer, and says where, why and
+    with what numbers.
+  - "Go to the chest" ends beside it; "come here" works on a dirt path.
+  - Fence gates, opened and closed behind it like doors.
+  - Bridges and towers built with the cheap blocks it carries, as a player
+    places them; digging through blocks on its break list, when allowed.
+  - Climbing out of a hole; swimming straight across open water.
+  - A tile it got stuck on is left out of its searches for a while, and it
+    walks a short detour when there is no way from where it stands.
 
 ## In progress
 
-- **Moving better** (see Next).
+- **Hordes** come next (see Next).
 
 ## Next
 
 - **Hordes.** Many bots with one brain: an army that follows a general, or a
   mindless horde. A headquarters with chests of gear, and wars between hordes.
-- **Moving better.** Bridges, towers and tunnels. Fence gates, climbing out of
-  holes, portals between dimensions, horses and leads.
+- **Moving further.** Portals between dimensions, horses and leads.
 - **Items.** Crafting with every loaded recipe, mods included. Furnaces.
   Chests the bot remembers, with their owners' permissions.
 - **Mining and building.** Strip mining that follows veins, staircases,
@@ -86,4 +96,6 @@ do, rebuilt to run on the server, and adds things only a server can do.
   line is meant for the bot.
 - **Performance.**
   - Stagger the first searches of many hunters that start at once.
+  - Crowds that build: bots sent together over one wall tower at the same
+    spot and get in each other's way.
   - Speed up the slow end of each layer when clearing.

@@ -8,9 +8,12 @@ one does not mean editing them. The other way round, an ability uses what
 `Bots` and `Brain` offer: the command helpers, the orders, the legs, a bot's
 data, the brain's notices.
 
-Four exceptions, on purpose, because what they decide lives in the core:
+Five exceptions, on purpose, because what they decide lives in the core:
 Walking's `sprint` setting is read in `Bots.canRun`, where the legs (routes,
-keys, doors) are; `Bots.died` asks `Respawning.staysDead` whether a bot that
+keys, doors) are; the legs also ask `Scaffolding` and `Tunnelling` whether a
+search may plan building or digging (their settings, the blocks it carries, its
+break list) and have them place and dig the blocks a route asks for, in
+`Bots.steer`; `Bots.died` asks `Respawning.staysDead` whether a bot that
 died comes back (its `respawn` setting, and the deaths it counts), and
 `Respawning.died` and `Respawning.where` for the words its owner hears, since a
 bot's coming and going is there; `Tools.offered` reads Talking's `brain_lite`,
@@ -246,7 +249,22 @@ same tick.
 
 `Bots.plan(p, to, goal, options, doing)` searches with options of its own
 (`Route.Options`: a longer fall, building, breaking); the other `plan`s use
-the walk's.
+the walk's, `Bots.walkOptions(p, build, nodes)`: partial routes, as long a fall
+as its health allows (`Bots.safeFall`, Masurium's: 3 blocks, a block more for
+every 4 health, 12 at most), and digging through its break list when its
+`break_to_advance` is on. A route searched with building or digging allowed is
+walked with those steps: the legs place the block a bridge or a tower needs, and
+dig the one in the way, before walking on. `Bots.arriveWithin(p, slack)`, after
+a `plan`, is how close to the last point the walk ends (1.4 blocks unless asked).
+
+What the legs do for every walk, a job's too: a tile the body failed to get into
+(six jumps without getting closer to it) is left out of the bot's searches for
+90 s (`StuckSpots`), so the next search finds another way; a job's walk stops
+then, saying so, and the job searches again. `Bots.blocked(p, why)` is the same
+for a step the walk cannot take (no block to build with, no permission to dig).
+A goto is a trip (`Trip`, `path/Leg.java`): walked a leg at a time and judged as a
+whole; a job that goes far walks stretches of partial routes and judges its own
+progress, as `Recover` does.
 
 ## Tools
 
