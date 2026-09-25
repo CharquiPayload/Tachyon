@@ -11,8 +11,9 @@ in the chat.
 One jar, in the server's `mods/` folder. Players join without installing
 anything, and no bot needs a Minecraft account or a game client of its own.
 
-**Early days (0.1.0).** It walks, follows, hunts, clears areas and talks; most of
-what a player does is still to come.
+**Early days (0.1.0).** It walks, follows, hunts, clears areas and talks; it comes
+back when it dies and when the server restarts; its settings have an in-game
+menu; most of what a player does is still to come.
 
 ## Installing
 
@@ -34,8 +35,10 @@ what a player does is still to come.
 | `/tachyon hunt <who> <mob> [count]` | owner, operators | kills that many of a mob each (every one around without a count) and picks up the drops |
 | `/tachyon clear <who> <from> <to>` | owner, operators | breaks every block in the box, top layer first, with the right tools |
 | `/tachyon tell <who> <words>` | owner, operators | says something to a bot, as if in the chat |
-| `/tachyon settings <who>` | owner, operators | its [settings](#settings): each one's value, and whether it is its own or the server's default |
+| `/tachyon config [<who>]` | owner, operators | opens the [config menu](#the-config-menu): your bots' settings (and, for operators, the server's defaults) in a chest; with `<who>`, that one bot's |
+| `/tachyon settings <who>` | owner, operators | its [settings](#settings): each one's value, and where it comes from |
 | `/tachyon set <who> <key> <value>` | owner, operators (some settings: operators only) | changes one of its settings; `default` as the value goes back to the server's default |
+| `/tachyon defaults [<key> <value>]` | operators | the server's defaults, for every bot without a value of its own: lists them, or sets one in game; `default` as the value clears it |
 | `/tachyon owner <who> [player]` | operators | whose it is, or give it to someone |
 | `/tachyon list` | anyone | your bots (every bot, for operators) and what each is doing |
 | `/tachyon brain [reload]` | operators | how the bots think, or read `tachyon.properties` again |
@@ -66,30 +69,107 @@ box, tell how it is, look around. When something it was asked is over (done, or
 given up), it says so, in its words. Each player can speak to bots a few times a
 minute (`per_minute`).
 
+## Death, restarts and the night
+
+**When a bot dies**, it comes back 2 seconds later, as a player who pressed
+"respawn" does: at its bed or respawn anchor if it set one and it is still
+there, else at the world's spawn; whole (health, food, air, no fire, no
+effects), with whatever it was doing dropped, and still the same bot (its owner,
+settings, data and brain). What it carried stays where it died. An order given to
+it in those 2 seconds, and what is said to it, it takes up once it is back; a bot
+that follows it waits, and follows it again. A bot that dies
+over and over (in lava, or where something kills it as soon as it is back) comes
+back 5 times in 5 minutes at most: the 6th time, it leaves the game instead. With
+`respawn` false it leaves the game when it dies, as it did in 0.1.0. Either way
+its owner, if online, gets a line: `[tachyon] Ada died (Ada was slain by Zombie)
+and is back at 12 64 -30`, or `... and left: 5 deaths in 5 minutes`. A bot that
+left is brought back with `spawn`, whole, as a respawn would bring it.
+
+**When the server stops**, the bots in the game are recorded with the world
+(`<world>/tachyon/roster.json`: name, dimension, position, rotation), and once it
+has started again each one comes back where it was, its owner's as before, unless
+its `come_back` is false. A server that crashes records them too, as it stops. A bot removed before the stop does not come back; one
+whose dimension is gone (a mod's, removed) comes back at the world's spawn. A
+broken roster is moved aside as `roster.json.bad-<time>`, and nobody comes back.
+
+**At night**, with `ignore_for_sleep` (the default), the bots are not players to
+the night: the players skip it by sleeping without them, and the "n/m players
+sleeping" line counts only the players; and no phantom is spawned because of a
+bot (phantoms come for a player who has not slept for three days, and once there
+they attack any player near, bots too). With it false a bot counts as any player
+does, and the night is skipped only if enough bots sleep too. It is
+the operators' to change, since it changes the night for everyone.
+
 ## Settings
 
 Settings are switches and numbers that say how a bot goes about what it does.
-`/tachyon settings <who>` lists them, each with its value and where that comes
-from; `/tachyon set <who> <key> <value>` changes one. For now there is one:
+The easiest way to change them is the [config menu](#the-config-menu); the
+commands do the same: `/tachyon settings <who>` lists a bot's, each with its
+value and where that comes from, and `/tachyon set <who> <key> <value>` changes
+one.
 
-| key | default | what |
-|---|---|---|
-| `sprint` | `true` | whether it may sprint when walking |
+| key | label (in the menu) | group | level | who changes it | default | what |
+|---|---|---|---|---|---|---|
+| `sprint` | Sprint when walking | Walking | basic | owner, operators | `true` | whether it may sprint when walking |
+| `respawn` | Come back after dying | Life | basic | owner, operators | `true` | whether it comes back by itself when it dies (5 times in 5 minutes at most); false: it leaves the game |
+| `come_back` | Come back after a restart | Life | basic | owner, operators | `true` | whether it comes back by itself, where it was, when the server starts again |
+| `ignore_for_sleep` | Left out of sleeping | Night | basic | operators | `true` | whether the players skip the night without it (it does not count for the sleeping percentage) and no phantoms spawn because of it |
+| `brain_lite` | Lite brain | Brain | advanced | owner, operators | `false` | whether its brain is sent only the core tools, for a small local model ([The brain](#the-brain)) |
 
-A setting has two layers:
+A bot's value is the first of four layers that has one:
 
-- **The server's default**, for every bot that has no value of its own:
-  `default.<key>=...` in `tachyon.properties` (`default.sprint=false`), or else
-  the default in the table. After editing the file, `/tachyon brain reload`.
-- **The bot's own value**, set with `/tachyon set`. It is kept with the world,
-  in `<world>/tachyon/bots/<name in lower case>.json`, so it stays when the bot
-  leaves and comes back. `/tachyon set <who> <key> default` clears it, and the
-  server's default applies again.
+1. **Its own**, set with the menu or `/tachyon set`. It is kept with the world,
+   in `<world>/tachyon/bots/<name in lower case>.json`, so it stays when the bot
+   leaves and comes back. Setting it back to `default` (Q in the menu) clears it.
+2. **The server's default set in game**, by operators, with the menu's "Server
+   defaults" or `/tachyon defaults <key> <value>`. It is kept with the world, in
+   `<world>/tachyon/defaults.json`, and applies at once to every bot without a
+   value of its own. A broken file is moved aside as `defaults.json.bad-<time>`,
+   and then there are none.
+3. **The server's default in `tachyon.properties`**: `default.<key>=...`
+   (`default.sprint=false`). After editing the file, `/tachyon brain reload`.
+4. **The mod's default**, in the table.
 
-A bot's owner and operators may change its settings; a few may be only the
-operators' (the list says which). A switch takes `true` or `false` (or `on`,
+`/tachyon settings` and the menu say which one a value comes from: `its own`,
+`server default, set in game`, `server default, in tachyon.properties` or `the
+mod's default`. `/tachyon defaults` lists the server's defaults the same way.
+
+A bot's owner and operators may change its settings; a few are only the
+operators' (the table says which). A switch takes `true` or `false` (or `on`,
 `off`, `yes`, `no`); a number, plain digits within its range, and one out of it
 is refused with the range.
+
+## The config menu
+
+`/tachyon config` opens a chest menu, drawn by the game itself: players need
+nothing installed. It shows the bots you may configure (your own; for operators,
+every bot) as heads, with what each is doing; operators also get **Server
+defaults**. With only one thing to show, it opens that directly;
+`/tachyon config <who>` opens one bot.
+
+A bot's page shows its **basic** settings, a row per group (the group's name
+first); **Advanced** opens the rest, and **Back** returns. Each setting's item is
+named by its label, and says under it what it does, its value, where that comes
+from and how to change it:
+
+- a switch is a dye, lime and glinting when on, gray when off: any click turns it
+  over;
+- a number is a clock, whose stack shows the value when it is a whole one from 1
+  to 99 (the text under it always says it): left click +1, right click -1, with
+  shift 10 at a time, kept within its range;
+- **Q** over a setting puts it back to the default (clears the bot's own value,
+  or on the Server defaults page the one set in game);
+- a setting only operators may change shows to others as a barrier, saying so.
+
+The Server defaults page (operators) is laid out the same way and changes the
+defaults set in game. Every change goes through the same checks as the commands,
+takes effect at once, and the page is drawn again; values changed elsewhere show
+within a second. A bot's value is kept in its data as `/tachyon set` keeps it
+(written within 30 seconds, when it leaves, or at the stop); a server default is
+written at once. Nothing can be taken out of the menu or put into it, and your
+own inventory is left alone. It closes by itself if the bot leaves the game, or
+if you may no longer configure it (it was given to someone else, you are no
+longer an operator).
 
 ## The brain
 
@@ -115,10 +195,15 @@ Some examples:
 | OpenAI | `openai` | `https://api.openai.com/v1` | `gpt-4o-mini` | yours |
 | Anthropic | `anthropic` | `https://api.anthropic.com/v1` | `claude-haiku-4-5` | yours |
 
-The model has to support tool calling. Any of `url`, `model`, `key` and `timeout`
-can be set for one bot only, as `<name>.<key>` (`Ada.model=...`). The key is read
-from this file and nowhere else, and is never said in the game; keep the file
-private. Empty `url`: the bots stay silent. After editing it, `/tachyon brain reload`.
+The model has to support tool calling. A small local model chooses badly among
+many tools: `/tachyon set <who> brain_lite true` sends it only the core ones
+(walking, stopping, hunting, clearing, how it is, what is around; for now that is
+every tool there is, and the tools still to come will not all be core).
+
+Any of `url`, `model`, `key` and `timeout` can be set for one bot only, as
+`<name>.<key>` (`Ada.model=...`). The key is read from this file and nowhere
+else, and is never said in the game; keep the file private. Empty `url`: the bots
+stay silent. After editing it, `/tachyon brain reload`.
 
 ## What it costs the server
 

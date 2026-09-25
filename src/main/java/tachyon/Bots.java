@@ -12,6 +12,7 @@ import com.mojang.brigadier.context.ParsedCommandNode;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.tree.CommandNode;
 import com.mojang.logging.LogUtils;
+import tachyon.mixin.PlayerListAccess;
 import tachyon.path.Route;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -34,13 +35,20 @@ import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.portal.DimensionTransition;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.scores.ScoreHolder;
+import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.ServerChatEvent;
 import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
+import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.neoforged.neoforge.event.entity.player.PlayerRespawnPositionEvent;
+import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import org.slf4j.Logger;
@@ -91,12 +99,15 @@ import java.util.stream.Collectors;
  *   /tachyon tell &lt;who&gt; &lt;words&gt;   as if said to it in the chat
  *   /tachyon settings &lt;who&gt;         its settings, and where each comes from
  *   /tachyon set &lt;who&gt; &lt;key&gt; &lt;value|default&gt;  one of them changed
+ *   /tachyon config [&lt;who&gt;]         the settings in a chest menu (see ConfigMenu)
+ *   /tachyon defaults [&lt;key&gt; &lt;value|default&gt;]  the server's defaults, set in game
  *   /tachyon brain [reload]         how they think (tachyon.properties)
  *   /tachyon owner &lt;who&gt; [player]   whose it is, or give it to them
  *   /tachyon list | stats [reset]
  * </pre>
  *
- * <p>Here are the bots' coming and going (spawn, remove, owner, list), their brain and
+ * <p>Here are the bots' coming and going (spawn, remove, a death and the respawn after it,
+ * owner, list), their brain and
  * figures, their orders, and their legs: the routes and the keys. What they do is the
  * abilities' ({@link Abilities}): each brings its commands, tools, settings and
  * reflexes, orders the bots through the {@code order...} methods here, and is told of
@@ -171,7 +182,15 @@ public final class Bots {
     private static final Stats STATS = new Stats();
 
     static final class Bot {
-        final BotPlayer body;
+        /**
+         * Its body. A respawn gives it a new one (see {@link #respawn}), as it gives a player:
+         * read it where it is used, and never keep it (in a job, a slot, a brain), or what
+         * is kept is a corpse. The server's thread's: another thread (a brain's) reads only
+         * {@link #name}.
+         */
+        BotPlayer body;
+        /** Its name, as its body's profile has it: kept apart, for the threads that must not touch the body. */
+        private final String name;
         /** What it keeps across leaving and coming back: read as it comes in. */
         final BotData data;
         String doing = "standing";
@@ -225,13 +244,16 @@ public final class Bots {
         /** Each ability's own state for it while it is in the game: see slot. */
         private final Map<Class<?>, Object> slots = new HashMap<>();
 
-        Bot(BotPlayer body, BotData data) {
+        /** @param name its body's, as its profile has it */
+        Bot(BotPlayer body, String name, BotData data) {
             this.body = body;
+            this.name = name;
             this.data = data;
         }
 
+        /** Its name; any thread may ask. */
         String name() {
-            return body.getGameProfile().getName();
+            return name;
         }
 
         /** Why it is leaving, in Ability.left; null while it is in the game. */
@@ -259,7 +281,7 @@ public final class Bots {
     enum Leaving {
         /** {@code /tachyon remove}. */
         REMOVED,
-        /** Its body died: a player's death, with no screen to press "respawn" on. */
+        /** Its body died and it does not come back (its respawn setting, or too many deaths: see {@link Respawning}). */
         DIED,
         /** The server stops. */
         STOPPING
@@ -342,6 +364,7 @@ public final class Bots {
         // that adds one of their names is told (see Abilities.commands).
         LiteralArgumentBuilder<CommandSourceStack> rest = Commands.literal("tachyon");
         Settings.commands(rest);
+        ConfigMenu.commands(rest);
         rest.then(Commands.literal("owner")
                         .requires(Bots::operator)
                         .then(who()
@@ -454,7 +477,7 @@ public final class Bots {
         }
         // Whoever brings it in owns it (a bot too, through execute as); from the console,
         // nobody, so it is still its last owner's.
-        bringIn(source.getServer(), source.getLevel(), name, at, source.getRotation().y, source.getPlayer());
+        bringIn(source.getServer(), source.getLevel(), name, at, source.getRotation().y, source.getPlayer(), "spawned");
         return true;
     }
 
@@ -469,34 +492,32 @@ public final class Bots {
      * A bot into the game, through the door a joining player uses: its body (what its
      * player save kept: inventory, health, where it stood), its data, its owner, then the
      * abilities told. The name must be free (see {@link #refusal}). Every way in goes
-     * through here: a spawn, and whatever brings bots back later (a respawn, a restart).
+     * through here: a spawn, and a bot brought back as the server starts
+     * ({@link Returning}). A respawn does not: the bot never left, and only its body is
+     * new (see {@link #respawn}).
      *
      * @param at    where it stands, facing {@code yaw}; null: where its player save left it
      *              (the world's spawn, the first time)
      * @param owner whose it is from now on; null: whose its data says it was
+     * @param how   how it came, for the one line in the log: "spawned", "came back"
      */
-    static Bot bringIn(MinecraftServer server, ServerLevel level, String name, Vec3 at, float yaw, ServerPlayer owner) {
+    static Bot bringIn(MinecraftServer server, ServerLevel level, String name, Vec3 at, float yaw, ServerPlayer owner, String how) {
         GameProfile profile = new GameProfile(UUIDUtil.createOfflinePlayerUUID(name), name);
         BotPlayer body = new BotPlayer(server, level, profile);
+        // (A name that died and left saved a dead body: it is made whole as its save is
+        // read, before the level shows it to anyone. See BotPlayer.readAdditionalSaveData.)
         server.getPlayerList().placeNewPlayer(new BotConnection(), body, CommonListenerCookie.createInitial(profile, false));
-        // A name that died before comes back with the body it saved when it left: dead,
-        // and a bot has no death screen to press "respawn" on. It comes back as a
-        // respawn would bring it: whole, not burning, not falling over.
-        if (body.isDeadOrDying()) {
-            body.setHealth(body.getMaxHealth());
-            body.deathTime = 0;
-            body.clearFire();
-        }
         if (at != null) body.teleportTo(level, at.x, at.y, at.z, yaw, 0);
         // Its file, read here on the server's thread as the player's own save just was:
         // a few hundred bytes, once, as it comes in.
-        Bot p = new Bot(body, BotData.load(BotData.folder(server), name));
+        Bot p = new Bot(body, name, BotData.load(BotData.folder(server), name));
         if (owner != null) setOwner(p, owner);
         else ownerFromData(p);
         body.bot = p;
         body.pilot = () -> pilot(p);
         ALL.put(key(name), p);
-        LOG.info("[tachyon] bot {} spawned at {}", name, body.blockPosition());
+        LOG.info("[tachyon] bot {} {} at {} in {}{}", name, how, Brain.pos(body.blockPosition()),
+                body.level().dimension().location(), p.ownerName == null ? ", nobody's" : ", " + p.ownerName + "'s");
         Abilities.joined(p);
         return p;
     }
@@ -574,6 +595,15 @@ public final class Bots {
 
     /** It stops whatever it does, a standing order too, and stands. */
     static void orderStop(Bot p) {
+        dropOrder(p, "standing");
+        Abilities.ordered(p);
+    }
+
+    /**
+     * Whatever it did, dropped, and nobody told: a reflex's hold on its body, its job, a
+     * standing order, where it went, whom it followed. It stands, saying {@code doing}.
+     */
+    private static void dropOrder(Bot p, String doing) {
         dropHold(p);
         endJob(p);
         // A standing order set aside for a detour: its job was let go of then.
@@ -581,8 +611,7 @@ public final class Bots {
         p.order = null;
         p.following = null;
         p.target = null;
-        halt(p, "standing");
-        Abilities.ordered(p);
+        halt(p, doing);
     }
 
     static void orderHunt(Bot p, EntityType<?> prey, String name, int count, Order by) {
@@ -709,6 +738,16 @@ public final class Bots {
         p.target = a.target();
         p.following = a.following();
         p.order = a.order();
+        goOn(p);
+    }
+
+    /**
+     * Its order, taken up again from where it stands, which is not where it was given: a
+     * walk searched again, a follower's next look searching again, a job going on (it
+     * thinks from its fields); with none, a standing order set aside. After a reflex let go
+     * of the body, and after a respawn.
+     */
+    private static void goOn(Bot p) {
         if (p.target != null) {
             p.replans = 0;
             plan(p, p.target, "going to " + p.target.toShortString());
@@ -862,6 +901,19 @@ public final class Bots {
         return pl != null && pl.getUUID().equals(p.owner);
     }
 
+    /**
+     * A player, as the menu sees them: its viewer, whose rights are theirs and not those of
+     * whatever ran the command that opened it ({@code execute as} keeps the console's).
+     */
+    static boolean operator(ServerPlayer pl) {
+        return pl.hasPermissions(2);
+    }
+
+    /** The same rule for a player: an operator every bot, anyone else the ones that are theirs. */
+    static boolean mayOrder(ServerPlayer pl, Bot p) {
+        return operator(pl) || pl.getUUID().equals(p.owner);
+    }
+
     /** Whose it is, or (with a player) it is theirs from now on. */
     private static int owner(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
         List<Bot> them = find(c);
@@ -907,12 +959,158 @@ public final class Bots {
 
     // --- coming and going ---------------------------------------------------------------
 
-    /** Its death, from the body ({@link BotPlayer#die}): it leaves, as a disconnected player would. */
-    static void died(BotPlayer body, DamageSource cause) {
+    /** How long a dead bot lies before it comes back: 2 s, about what a player takes to press "respawn". */
+    private static final int RESPAWN_TICKS = 40;
+
+    /** A bot that died and comes back: at tick {@code at}. {@code death}: "Ada died (Ada fell from a high place)". */
+    private record Dead(long at, String death) {
+    }
+
+    /** The bots that died and come back, until they do. The server's thread's. */
+    private static final Map<Bot, Dead> DEAD = new LinkedHashMap<>();
+
+    /**
+     * Its death, from the body ({@link BotPlayer#die}); {@code message} is the one said in
+     * the chat. The abilities are told, while its order is as it was. Then it comes back in
+     * 2 s ({@link #respawn}) or, when {@link Respawning} says it does not (its setting, or
+     * too many deaths lately), it leaves, as a disconnected player would. Its owner is told
+     * which, in a line.
+     *
+     * <p>It may come in the middle of the bot's own tick: a job's hit that thorns paid back,
+     * a reflex's. Its order is gone when this returns ({@code p.job} null): whoever called
+     * what killed it looks again before going on (see {@link #pilot}).
+     */
+    static void died(BotPlayer body, DamageSource cause, Component message) {
         Bot p = body.bot;
         if (p == null) return;          // already on its way out
         Abilities.died(p, cause);
-        leave(p, Leaving.DIED);
+        String death = p.name() + " died (" + message.getString() + ")";
+        String staying = Respawning.staysDead(p, System.currentTimeMillis());
+        if (staying != null) {
+            tellOwner(p, death + " and left: " + staying);
+            leave(p, Leaving.DIED);
+            return;
+        }
+        // What it did is over now, not in 2 s: its hands are gone, and a job's claims (a
+        // block of a box others clear too) are let go of. Nobody is told: its owner hears
+        // of the death. A dead hand closes no door.
+        p.doorOpen = null;
+        dropOrder(p, "dead: back in a moment");
+        DEAD.put(p, new Dead(body.getServer().getTickCount() + RESPAWN_TICKS, death));
+    }
+
+    /**
+     * The dead whose time came ({@code tick}, or every one with {@link Long#MAX_VALUE}),
+     * back in the game. At the end of a tick, outside every body's: a body is taken out of
+     * a level and another put in.
+     */
+    private static void backFromDeath(long tick) {
+        if (DEAD.isEmpty()) return;
+        List<Bot> due = new ArrayList<>();
+        DEAD.forEach((p, d) -> {
+            if (d.at() <= tick) due.add(p);
+        });
+        for (Bot p : due) {
+            Dead d = DEAD.remove(p);
+            try {
+                respawn(p, d);
+            } catch (RuntimeException e) {
+                // Never a crash of the tick; and never a bot left dead for good either.
+                LOG.error("[tachyon] {} could not come back: it leaves", p.name(), e);
+                tellOwner(p, d.death() + " and left: it could not come back (the server's log says why)");
+                leave(p, Leaving.DIED);
+            }
+        }
+    }
+
+    /**
+     * A dead bot back in the game, as a player who pressed "respawn" comes back: at its
+     * respawn point (its bed or respawn anchor, if it set one and it is still there, else
+     * the world's spawn), whole, in a new body. Its record stays as it was: owner, settings,
+     * data, brain, the abilities' slots. Its order was dropped as it died. One given to it
+     * while it lay dead (a command, a tool its brain called), which its corpse did nothing
+     * of, it carries out now, from where it came back; and its brain thinks about what was
+     * said to it meanwhile ({@link Brain#back}). Whoever followed its corpse follows the new
+     * body ({@link #onClone}).
+     *
+     * <p>It does what {@code PlayerList.respawn} does, which cannot be called: that makes a
+     * plain {@code ServerPlayer}, with no pilot and no bot, in place of the
+     * {@link BotPlayer}. The body is a new entity and not the old one healed: a client that
+     * saw the death counts the corpse's {@code deathTime} up while its health is 0 and draws
+     * it lying down while that is over 0, and health given back in place does not undo it.
+     * Taken out of its level and a new one put in, with the same entity id, the trackers
+     * tell every client to forget the corpse and to add a player standing where it came back.
+     */
+    private static void respawn(Bot p, Dead d) {
+        BotPlayer old = p.body;
+        MinecraftServer server = old.getServer();
+        PlayerListAccess list = (PlayerListAccess) server.getPlayerList();
+        list.tachyon$players().remove(old);
+        old.serverLevel().removePlayerImmediately(old, Entity.RemovalReason.KILLED);
+        DimensionTransition to = old.findRespawnPositionAndUseSpawnBlock(false, DimensionTransition.DO_NOTHING);
+        PlayerRespawnPositionEvent where = NeoForge.EVENT_BUS.post(new PlayerRespawnPositionEvent(old, to, false));
+        to = where.getDimensionTransition();
+        ServerLevel level = to.newLevel();
+        BotPlayer body = new BotPlayer(server, level, old.getGameProfile());
+        body.connection = old.connection;
+        body.restoreFrom(old, false);
+        body.setId(old.getId());
+        body.setMainArm(old.getMainArm());
+        if (where.copyOriginalSpawnPosition()) body.copyRespawnPosition(old);
+        for (String tag : old.getTags()) body.addTag(tag);
+        body.moveTo(to.pos().x, to.pos().y, to.pos().z, to.yRot(), to.xRot());
+        // What else PlayerList.respawn sends goes to the player's own client (the world,
+        // the time, where it stands): a bot has none. The connection is its player's,
+        // which vanilla sets from what respawn returns.
+        old.connection.player = body;
+        old.bot = null;
+        old.pilot = null;
+        p.body = body;
+        // Before it is in the level: the count of sleepers is taken again as it goes in,
+        // and asks whether it is a bot (Sleeping).
+        body.bot = p;
+        body.pilot = () -> pilot(p);
+        level.addRespawnedPlayer(body);
+        list.tachyon$players().add(body);
+        list.tachyon$playersByUUID().put(body.getUUID(), body);
+        body.initInventoryMenu();
+        body.setHealth(body.getHealth());
+        NeoForge.EVENT_BUS.post(new PlayerEvent.PlayerRespawnEvent(body, false));
+        p.handsBy = null;
+        // Nothing of the corpse's walk is left (a search from where it lay, keys pressed);
+        // then what it was ordered while dead, if anything, from here.
+        halt(p, "standing");
+        goOn(p);
+        tellOwner(p, d.death() + " and is back at " + Brain.pos(body.blockPosition()));
+        if (p.brain != null) p.brain.back();
+    }
+
+    /**
+     * A player's body replaced by a new one: a respawn (a bot's, in {@link #respawn}, and a
+     * player's), or the way back from the End. Whoever followed the old body follows the
+     * new one, searching again toward where it is now; a follow set aside by a reflex too.
+     * NeoForge posts it from {@code ServerPlayer.restoreFrom}, as the new body is made.
+     */
+    @SubscribeEvent
+    public void onClone(PlayerEvent.Clone event) {
+        if (!(event.getOriginal() instanceof ServerPlayer old) || !(event.getEntity() instanceof ServerPlayer now)) return;
+        for (Bot q : ALL.values()) {
+            if (q.following == old) {
+                q.following = now;
+                q.plannedAt = -REPLAN_TICKS;
+                q.leaderX = Double.NaN;
+            }
+            if (q.aside != null && q.aside.following() == old) {
+                q.aside = new Aside(q.aside.job(), q.aside.target(), now, q.aside.order());
+            }
+        }
+    }
+
+    /** A line to its owner, if they are in the game; and to the log, for the console. */
+    private static void tellOwner(Bot p, String text) {
+        LOG.info("[tachyon] {}", text);
+        ServerPlayer owner = p.owner == null ? null : p.body.getServer().getPlayerList().getPlayer(p.owner);
+        if (owner != null && owner != p.body) owner.sendSystemMessage(Component.literal("[tachyon] " + text));
     }
 
     /**
@@ -923,6 +1121,16 @@ public final class Bots {
      * inside its hurt, which goes on after this.
      */
     private static void leave(Bot p, Leaving why) {
+        leave(p, why, true);
+    }
+
+    /**
+     * @param letGo whether its body is let go of (disconnected, out of the player list and
+     *              its level): not after a crash ({@link #onStopped}), when the server
+     *              has saved every player and closed its levels already
+     */
+    private static void leave(Bot p, Leaving why, boolean letGo) {
+        DEAD.remove(p);             // dead, and removed before it came back
         p.leaving = why;
         Abilities.left(p);
         dropHold(p);
@@ -936,6 +1144,7 @@ public final class Bots {
         BotPlayer body = p.body;
         body.pilot = null;
         body.bot = null;
+        if (!letGo) return;
         String words = switch (why) {
             case REMOVED -> "removed";
             case DIED -> "died";
@@ -947,14 +1156,69 @@ public final class Bots {
         else disconnect.run();
     }
 
+    /**
+     * As the server starts, its levels loaded and before any bot comes in (Returning brings
+     * them back once it has started): the server's defaults set in game, read from the world.
+     */
+    @SubscribeEvent
+    public void onStarting(ServerStartingEvent event) {
+        Abilities.settings().game(Settings.gameStore(event.getServer()));
+    }
+
+    /** The server's stop began as a stop does, with its stopping event: see {@link #onStopped}. The server's thread's. */
+    private static boolean stopping;
+
     @SubscribeEvent
     public void onStopping(ServerStoppingEvent event) {
+        stopping = true;
         runLater();
+        // The dead that were to come back in a moment come back now: they leave from where
+        // they came back to, and that is where they are when the server starts again.
+        backFromDeath(Long.MAX_VALUE);
         for (Bot p : List.copyOf(ALL.values())) leave(p, Leaving.STOPPING);
         ALL.clear();
+        closeStores();
+    }
+
+    /**
+     * Once the server has stopped. After a stop there is nothing left to do: onStopping did
+     * it. After a crash there was no stopping (NeoForge posts ServerStoppingEvent only from
+     * the end of the server's loop, and this one from its {@code finally}), and the bots are
+     * still here. They leave now, as at a stop, so that their data is written and Returning
+     * records them where they were, to come back when the server starts again. That is why
+     * this runs first ({@code HIGHEST}): Returning writes its roster at this same event. Their
+     * bodies are left as they are: the server saved them with every player, and closed the
+     * levels they were in. What was to happen at the end of the tick (a dead bot's
+     * disconnection) and a respawn due are dropped with the tick they were for.
+     */
+    @SubscribeEvent(priority = EventPriority.HIGHEST)
+    public void onStopped(ServerStoppedEvent event) {
+        if (stopping) {
+            stopping = false;
+            return;
+        }
+        if (!ALL.isEmpty()) LOG.warn("[tachyon] the server stopped without a stop (a crash): its {} bot(s) leave now", ALL.size());
+        LATER.clear();
+        for (Bot p : List.copyOf(ALL.values())) {
+            try {
+                leave(p, Leaving.STOPPING, false);
+            } catch (RuntimeException e) {
+                LOG.error("[tachyon] {} could not leave as the server stopped", p.name(), e);
+            }
+        }
+        ALL.clear();
+        DEAD.clear();
+        closeStores();
+    }
+
+    /**
+     * The shared stores, the defaults set in game among them, written here and now; then the
+     * writes still on their way, and the ones that failed, of bots long gone too.
+     */
+    private static void closeStores() {
         BotData.saveShared(true);
+        Abilities.settings().game(null);
         BotData.forgetShared();
-        // The writes still on their way, and the ones that failed, of bots long gone too.
         BotData.stop(10_000);
     }
 
@@ -1004,6 +1268,7 @@ public final class Bots {
     public void onTick(ServerTickEvent.Post event) {
         runLater();
         int tick = event.getServer().getTickCount();
+        backFromDeath(tick);
         // What changed in the bots' data, every 30 s: a crash loses that much at most.
         // Each bot on a tick of its own (by its name), so that a crowd's copies are not
         // all taken in one tick; the shared stores and the writes that failed, together.
@@ -1030,24 +1295,34 @@ public final class Bots {
      * reflexes first (one may take the body or the hands); then, unless a reflex holds
      * the body, the walk's plans and the job's; the walk's keys; the reflexes' hands; and,
      * unless the body or the hands are held, the job's hands.
+     *
+     * <p>Any of them may get it killed (a hit that thorns pays back, a guardian's answer),
+     * and a death drops its order there and then ({@link #died}): its job is gone, and
+     * whatever came next in this tick is not for a corpse. So it looks again after each.
      */
     private static void pilot(Bot p) {
-        if (!p.body.isAlive()) return;
-        long now = p.body.getServer().getTickCount();
+        BotPlayer body = p.body;
+        if (!body.isAlive()) return;
+        long now = body.getServer().getTickCount();
         Abilities.tick(p, now);
+        if (!body.isAlive()) return;
         if (p.heldBy == null) {
             follow(p, now);
-            if (p.job != null && !p.job.think(p, now)) {
+            Job j = p.job;
+            if (j != null && !j.think(p, now) && p.job == j) {
                 endJob(p);
                 finished(p);
             }
+            if (!body.isAlive()) return;
         }
         adopt(p);
         steer(p);
         Abilities.act(p, now);
-        if (p.heldBy == null && p.job != null) {
-            if (handsFree(p)) p.job.act(p);
-            p.doing = p.job.status();
+        if (!body.isAlive()) return;
+        Job j = p.job;
+        if (p.heldBy == null && j != null) {
+            if (handsFree(p)) j.act(p);
+            if (p.job == j) p.doing = j.status();
         }
     }
 
@@ -1080,6 +1355,11 @@ public final class Bots {
         p.job = null;
         if (p.standing != null && p.standing.job() == j) p.standing = null;
         j.end(p);
+    }
+
+    /** The bot in the game called so, in any case, or null. */
+    static Bot named(String name) {
+        return ALL.get(key(name));
     }
 
     /**
@@ -1152,6 +1432,10 @@ public final class Bots {
         ServerPlayer leader = p.following;
         if (leader == null) return;
         String doing = "following " + leader.getGameProfile().getName();
+        // Dead and still in the game (a player on the death screen, a bot 2 s from coming
+        // back): it waits, searching nothing new. The body that comes back is followed
+        // (onClone). Its corpse is gone from the level after a second, and is not "lost".
+        if (leader.isDeadOrDying() && p.body.getServer().getPlayerList().getPlayer(leader.getUUID()) == leader) return;
         if (leader.isRemoved() || leader.level() != p.body.level()) {
             p.following = null;
             halt(p, "lost " + leader.getGameProfile().getName());

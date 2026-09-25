@@ -3,6 +3,7 @@ package tachyon;
 import com.google.gson.JsonArray;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,16 +41,28 @@ final class Tools {
         return json;
     }
 
-    /** The tools offered to a bot, in order (see {@link Tool#offeredWhen}). On the server's thread. */
+    /**
+     * The tools offered to a bot, in order (see {@link Tool#offeredWhen}); with its
+     * {@code brain_lite} setting (declared by {@link Talking}), only the core ones
+     * ({@link Tool#core}). On the server's thread, as each of its brain's turns starts.
+     */
     List<Tool> offered(Bots.Bot p) {
+        return offered(p, Settings.bool(p, Talking.BRAIN_LITE));
+    }
+
+    /** The tools offered to a bot, the core ones only when {@code lite}. */
+    List<Tool> offered(Bots.Bot p, boolean lite) {
         List<Tool> out = new ArrayList<>(byName.size());
         for (Tool t : byName.values()) {
-            if (t.offeredTo(p)) out.add(t);
+            if ((!lite || t.isCore()) && t.offeredTo(p)) out.add(t);
         }
         return out;
     }
 
-    /** What the model is sent of {@code tools}: the array of them all when they are all there. */
+    /**
+     * What the model is sent of {@code tools}, which a bot is offered: the array of them all
+     * when they are all there, the same as ever; else one made for it.
+     */
     JsonArray json(List<Tool> tools) {
         if (tools.size() == byName.size()) return json;
         JsonArray some = new JsonArray();
@@ -64,7 +77,17 @@ final class Tools {
      * off the server's thread.
      */
     CompletableFuture<String> start(String name, Tool.Call call) {
-        Tool tool = byName.get(name);
+        return start(name, call, byName.keySet());
+    }
+
+    /**
+     * {@link #start}, for a turn that was sent only the tools named {@code offered} (a lite
+     * brain's, those {@link Tool#offeredWhen} gave the bot): a call of any other is refused
+     * as one of no tool at all, since to this bot, this turn, it is none. A model may still
+     * name one: from its history (the setting changed), or by a guess.
+     */
+    CompletableFuture<String> start(String name, Tool.Call call, Collection<String> offered) {
+        Tool tool = offered.contains(name) ? byName.get(name) : null;
         if (tool == null) return CompletableFuture.completedFuture("there is no tool " + name);
         try {
             if (tool.handler != null) return CompletableFuture.completedFuture(tool.handler.run(call));

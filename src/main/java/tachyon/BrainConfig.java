@@ -21,7 +21,7 @@ import java.util.Properties;
  * The key is read from here and nowhere else; it is never said in the game.
  *
  * <p>The same file holds the server's defaults for the bots' settings, as
- * {@code default.<setting>=...} (see {@link Settings}).
+ * {@code default.<setting>=...}, under those operators set in game (see {@link Settings}).
  */
 final class BrainConfig {
 
@@ -51,7 +51,8 @@ final class BrainConfig {
             # Any of url, model, key or timeout for one bot only: <name>.<key>=...
             #
             # A setting's value for every bot that has none of its own (/tachyon settings
-            # lists them): default.<setting>=..., as default.sprint=false
+            # lists them): default.<setting>=..., as default.sprint=false. One an operator
+            # set in game (/tachyon defaults, or /tachyon config) comes before these.
             """;
 
     private final Properties p;

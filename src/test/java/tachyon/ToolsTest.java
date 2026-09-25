@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -35,31 +36,80 @@ class ToolsTest {
     }
 
     /**
-     * {@code tools-0.1.0.json} is what 0.1.0 sent the model, printed from it before its
-     * tools became the abilities'. What the model is told is behaviour: every word of it
-     * shapes what it calls. New tools may come among them; these stay as they were.
+     * {@code core-tools.json} is what the model is sent of the eight tools of 0.1.0, every
+     * bot's core. What the model is told is behaviour: every word of it shapes what it
+     * calls. New tools may come among them; these stay as they are, unless changed on
+     * purpose, and the file with them.
+     *
+     * <p>Changed once, on purpose: 0.1.0 sent hunt's {@code mob} as optional, and its
+     * description cut at a colon ("The mob, as Minecraft names it"), since its tools were
+     * written as "name:type:description" and the colon split the description. It is sent
+     * now required, and whole. The rest is what 0.1.0 sent, to the byte.
      */
     @Test
-    @DisplayName("the tools of 0.1.0 are sent to the model as they were, to the byte and in their order")
-    void theToolsOf010AreSentAsTheyWere() throws IOException {
-        String before;
-        try (InputStream in = ToolsTest.class.getResourceAsStream("tools-0.1.0.json")) {
+    @DisplayName("the core tools are sent to the model as the file has them, to the byte and in their order")
+    void theCoreToolsAreSentAsTheFileHasThem() throws IOException {
+        String expected;
+        try (InputStream in = ToolsTest.class.getResourceAsStream("core-tools.json")) {
             assertNotNull(in, "the resource is there");
-            before = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            expected = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
-        Set<String> old = new HashSet<>();
-        for (JsonElement t : JsonParser.parseString(before).getAsJsonArray()) old.add(name(t));
-        assertEquals(8, old.size());
+        Set<String> core = new HashSet<>();
+        for (JsonElement t : JsonParser.parseString(expected).getAsJsonArray()) core.add(name(t));
+        assertEquals(8, core.size());
 
         JsonArray theirs = new JsonArray();
         for (JsonElement t : Abilities.tools().json()) {
-            if (old.contains(name(t))) theirs.add(t);
+            if (core.contains(name(t))) theirs.add(t);
         }
-        assertEquals(before, theirs.toString());
+        assertEquals(expected, theirs.toString());
+        for (String n : core) assertTrue(Abilities.tools().get(n).isCore(), n + " is core: a lite brain has it");
+    }
+
+    @Test
+    @DisplayName("a lite brain is offered the core tools only; a full one every tool, the same array as ever")
+    void liteBrain() {
+        Tools tools = new Tools();
+        tools.add(new Tool("walk", "Walk.", List.of(), c -> "").core());
+        tools.add(new Tool("farm", "Farm.", List.of(), c -> ""));
+        tools.add(new Tool("stop", "Stop.", List.of(), c -> "").core());
+        assertEquals(List.of("walk", "stop"), tools.offered(null, true).stream().map(t -> t.name).toList());
+        assertEquals(2, tools.json(tools.offered(null, true)).size());
+        assertSame(tools.json(), tools.json(tools.offered(null, false)), "the full catalogue, untouched");
+        assertEquals(new Tool("t", "T.", List.of(), c -> "").json(), new Tool("t", "T.", List.of(), c -> "").core().json(),
+                "being core is never part of what is sent");
     }
 
     private static Tool.Call call(JsonObject args) {
         return new Tool.Call(null, args, null, "Someone", null);
+    }
+
+    /**
+     * A tool left out of a turn (a lite brain's non-core tools, one offeredWhen does not
+     * give the bot) is sent to nobody, and a call of it is refused as one of no tool: the
+     * model may still name it, from its history or by a guess, and must not run it.
+     */
+    @Test
+    @DisplayName("a call of a tool this turn was not sent is refused as one of no tool, and never runs")
+    void onlyWhatWasSentRuns() throws Exception {
+        Tools tools = new Tools();
+        List<String> ran = new ArrayList<>();
+        tools.add(new Tool("walk", "Walk.", List.of(), c -> {
+            ran.add("walk");
+            return "walking";
+        }).core());
+        tools.add(new Tool("farm", "Farm.", List.of(), c -> {
+            ran.add("farm");
+            return "farming";
+        }));
+        List<String> lite = tools.offered(null, true).stream().map(t -> t.name).toList();
+        assertEquals("there is no tool farm", tools.start("farm", call(new JsonObject()), lite).get(5, TimeUnit.SECONDS));
+        assertEquals("walking", tools.start("walk", call(new JsonObject()), lite).get(5, TimeUnit.SECONDS));
+        assertEquals(List.of("walk"), ran, "the tool left out never ran");
+        List<String> full = tools.offered(null, false).stream().map(t -> t.name).toList();
+        assertEquals("farming", tools.start("farm", call(new JsonObject()), full).get(5, TimeUnit.SECONDS));
+        assertEquals("there is no tool fly", tools.start("fly", call(new JsonObject()), List.of("fly")).get(5, TimeUnit.SECONDS),
+                "a name offered but no tool is still no tool");
     }
 
     @Test
@@ -113,7 +163,7 @@ class ToolsTest {
         tools.add(new Tool("always", "Always.", List.of(), c -> ""));
         tools.add(new Tool("never", "Never.", List.of(), c -> "").offeredWhen(bot -> false));
         tools.add(new Tool("also", "Also.", List.of(), c -> ""));
-        List<Tool> offered = tools.offered(null);
+        List<Tool> offered = tools.offered(null, false);
         assertEquals(List.of("always", "also"), offered.stream().map(t -> t.name).toList());
         JsonArray sent = tools.json(offered);
         assertEquals(2, sent.size());
@@ -121,7 +171,7 @@ class ToolsTest {
 
         Tools all = new Tools();
         all.add(new Tool("a", "A.", List.of(), c -> ""));
-        assertSame(all.json(), all.json(all.offered(null)), "nobody left out: the same array, not a copy");
+        assertSame(all.json(), all.json(all.offered(null, false)), "nobody left out: the same array, not a copy");
     }
 
     @Test

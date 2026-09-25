@@ -70,7 +70,13 @@ interface Ability {
     default void left(Bots.Bot p) {
     }
 
-    /** A bot died, of {@code cause}: before {@link #left}, which follows. */
+    /**
+     * A bot died, of {@code cause}, its order as it was. Then either it comes back 2 s
+     * later, at its respawn point, in a new body and with its order dropped (the same
+     * {@code p}: its data and slots stay; an order given to it while it lay dead is carried
+     * out then), or it leaves, and {@link #left} follows (see {@link Respawning}). It may
+     * come in the middle of the bot's own tick, from a hit its job or a reflex dealt.
+     */
     default void died(Bots.Bot p, DamageSource cause) {
     }
 

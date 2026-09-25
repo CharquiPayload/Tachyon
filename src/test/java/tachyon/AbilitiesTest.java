@@ -71,7 +71,7 @@ class AbilitiesTest {
     @Test
     @DisplayName("an ability's slot on a bot is made once, and is the same after")
     void slots() {
-        Bots.Bot p = new Bots.Bot(null, BotData.load(dir, "Ada"));
+        Bots.Bot p = new Bots.Bot(null, "Ada", BotData.load(dir, "Ada"));
         int[] made = {0};
         Count c = p.slot(Count.class, () -> {
             made[0]++;
@@ -81,7 +81,7 @@ class AbilitiesTest {
         assertSame(c, p.slot(Count.class, Count::new));
         assertEquals(1, p.slot(Count.class, Count::new).n);
         assertEquals(1, made[0]);
-        Bots.Bot other = new Bots.Bot(null, BotData.load(dir, "Bea"));
+        Bots.Bot other = new Bots.Bot(null, "Bea", BotData.load(dir, "Bea"));
         assertEquals(0, other.slot(Count.class, Count::new).n, "each bot its own");
     }
 }

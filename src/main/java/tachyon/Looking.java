@@ -22,9 +22,9 @@ final class Looking implements Ability {
             BotPlayer b = call.bot().body;
             return "health " + Math.round(b.getHealth()) + "/20, food " + b.getFoodData().getFoodLevel()
                     + "/20, doing: " + call.bot().doing + "; carrying: " + Brain.inventory(b);
-        }));
+        }).core());
         tools.add(new Tool("look_around", "Who and what is near you: players, mobs, things lying on the ground.", List.of(),
-                call -> around(call.bot().body)));
+                call -> around(call.bot().body)).core());
     }
 
     /** Players within 64 (8 at most), mobs within 24 by kind, and how many things lie within 16. */

@@ -48,16 +48,17 @@ final class Hunting implements Ability {
     @Override
     public void tools(Tools tools) {
         tools.add(new Tool("hunt", "Hunt a kind of mob with your best weapon and pick up what it drops.",
-                // "mob" is sent as the model has been sent it since 0.1.0, to the byte: the
-                // tools were once written as "name:type:description[:optional]", and the
-                // colon in its description ("...names it: cow, pig, sheep, chicken,
-                // zombie...") cut it there and made it optional. Mending it changes what
-                // every model is sent, which is a change of its own.
-                List.of(Tool.optional("mob", "string", "The mob, as Minecraft names it"),
+                // 0.1.0 sent "mob" as optional, its description cut short at "names it": its
+                // tools were written as "name:type:description[:optional]", and the colon
+                // in the description split it there. Mended: required, since a hunt with
+                // no mob is none, and whole.
+                List.of(Tool.param("mob", "string", "The mob, as Minecraft names it: cow, pig, sheep, chicken, zombie..."),
                         Tool.optional("count", "integer", "How many to kill; 0 for every one around")),
                 call -> {
                     JsonObject a = call.args();
                     BotPlayer b = call.bot().body;
+                    // Required, and still a model may leave it out.
+                    if (!a.has("mob") || !a.get("mob").isJsonPrimitive()) return "no mob was named: which one? (cow, zombie...)";
                     String mob = a.get("mob").getAsString().toLowerCase(Locale.ROOT).trim().replace(' ', '_');
                     ResourceLocation id = ResourceLocation.tryParse(mob.contains(":") ? mob : "minecraft:" + mob);
                     EntityType<?> type = id == null ? null : BuiltInRegistries.ENTITY_TYPE.getOptional(id).orElse(null);
@@ -68,6 +69,6 @@ final class Hunting implements Ability {
                     return "started hunting " + id.getPath() + (count > 0 ? ", " + count : ", every one around") + ", "
                             + (Hunt.damage(b.getMainHandItem()) > 0 ? "with " + Brain.item(b.getMainHandItem()) : "bare-handed (no weapon)")
                             + "; none killed yet, it takes a while";
-                }));
+                }).core());
     }
 }

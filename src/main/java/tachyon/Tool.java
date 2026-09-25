@@ -82,6 +82,8 @@ final class Tool {
     private String rule;
     /** Whether a bot is offered it (a setting, a permission); null: every bot, always. */
     private Predicate<Bots.Bot> offered;
+    /** One of the few a lite brain is sent too (see {@link #core()}). */
+    private boolean core;
 
     Tool(String name, String description, List<Param> params, Handler handler) {
         this(name, description, params, handler, null);
@@ -115,9 +117,11 @@ final class Tool {
     }
 
     /**
-     * Offered to a bot only when {@code when} says so (a setting, a permission, a lite
-     * brain): asked as each of its brain's turns starts, on the server's thread. A tool not
-     * offered is not sent, so the model neither sees nor calls it. Set as it is made.
+     * Offered to a bot only when {@code when} says so (a setting, a permission): asked as
+     * each of its brain's turns starts, on the server's thread. A tool not offered is not
+     * sent, and a call of it that turn is refused as a call of no tool at all (see
+     * {@link Tools#start(String, Call, java.util.Collection)}): the model neither sees nor
+     * runs it. (A lite brain is {@link #core}'s.) Set as it is made.
      */
     Tool offeredWhen(Predicate<Bots.Bot> when) {
         this.offered = when;
@@ -126,6 +130,21 @@ final class Tool {
 
     boolean offeredTo(Bots.Bot p) {
         return offered == null || offered.test(p);
+    }
+
+    /**
+     * One of the core tools: those a bot with a lite brain ({@code brain_lite}, for a small
+     * local model) is sent, the rest being left out. Every tool is sent to a full brain.
+     * What a small model is sent is what it can choose well from: a tool is core when a
+     * bot is of little use without it. Set as it is made; never part of what is sent.
+     */
+    Tool core() {
+        this.core = true;
+        return this;
+    }
+
+    boolean isCore() {
+        return core;
     }
 
     /**

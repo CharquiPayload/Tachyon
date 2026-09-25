@@ -25,3 +25,9 @@ type = "required"
 versionRange = "[1.21.1,1.22)"
 ordering = "NONE"
 side = "SERVER"
+
+# Two small changes to Minecraft's own classes, on a dedicated server only (the config's
+# "server" list): the count of sleepers without the bots that do not count, and the player
+# list's own lists for a bot's respawn. See the classes in tachyon.mixin.
+[[mixins]]
+config = "tachyon.mixins.json"

@@ -139,26 +139,47 @@ final class BotData {
             return new BotData(file, new JsonObject(), true);
         }
         try {
-            // Strict UTF-8: bytes that are not are a broken file, not text to guess at.
-            String text = StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString();
-            JsonElement read = JsonParser.parseString(text);
-            if (!read.isJsonObject()) throw new JsonParseException("not a JSON object");
-            return new BotData(file, read.getAsJsonObject(), false);
+            return new BotData(file, parse(bytes), false);
         } catch (CharacterCodingException | RuntimeException e) {
-            // What the parser throws for text that is no JSON is Gson's JsonParseException,
-            // a RuntimeException like the rest of what a broken file can make it throw.
-            Path aside = file.resolveSibling(file.getFileName() + ".bad-" + System.currentTimeMillis());
-            try {
-                Files.move(file, aside);
-                LOG.warn("[tachyon] {} is broken ({}): moved aside as {}; {} starts with nothing",
-                        file, e.getMessage(), aside.getFileName(), whose);
-                return new BotData(file, new JsonObject(), false);
-            } catch (IOException moving) {
-                // Where it is, it would be written over: kept off it instead.
-                LOG.warn("[tachyon] {} is broken ({}) and could not be moved aside ({}); {} starts with nothing,"
-                        + " and the file is left as it is", file, e.getMessage(), moving.toString(), whose);
-                return new BotData(file, new JsonObject(), true);
-            }
+            // Where it is, a broken file that could not be moved would be written over:
+            // kept off it instead.
+            boolean moved = setAside(file, e.getMessage(), whose + " starts with nothing");
+            return new BotData(file, new JsonObject(), !moved);
+        }
+    }
+
+    /**
+     * A file's bytes as a JSON object. Bytes that are not one (not UTF-8, not JSON, JSON
+     * but no object) throw: {@link CharacterCodingException}, or Gson's
+     * {@link JsonParseException}, a RuntimeException like the rest of what broken text can
+     * make the parser throw.
+     */
+    static JsonObject parse(byte[] bytes) throws CharacterCodingException {
+        // Strict UTF-8: bytes that are not are a broken file, not text to guess at.
+        String text = StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString();
+        JsonElement read = JsonParser.parseString(text);
+        if (!read.isJsonObject()) throw new JsonParseException("not a JSON object");
+        return read.getAsJsonObject();
+    }
+
+    /**
+     * A broken file moved aside, as {@code <name>.bad-<time>} beside it, with a warning
+     * that says {@code why} and what comes of it ({@code then}: "Ada starts with
+     * nothing"): never a crash, and never the broken file written over, since someone may
+     * want what is in it.
+     *
+     * @return false when it could not be moved (said too): it is where it was
+     */
+    static boolean setAside(Path file, String why, String then) {
+        Path aside = file.resolveSibling(file.getFileName() + ".bad-" + System.currentTimeMillis());
+        try {
+            Files.move(file, aside);
+            LOG.warn("[tachyon] {} is broken ({}): moved aside as {}; {}", file, why, aside.getFileName(), then);
+            return true;
+        } catch (IOException moving) {
+            LOG.warn("[tachyon] {} is broken ({}) and could not be moved aside ({}); {}, and the file is left as it is",
+                    file, why, moving.toString(), then);
+            return false;
         }
     }
 
@@ -176,10 +197,19 @@ final class BotData {
     }
 
     static BotData shared(Path folder, String name) {
+        return shared(folder, name, "the shared store " + name);
+    }
+
+    /**
+     * The same, in a folder of the caller's and said in the log as {@code whose} ("the
+     * server's list of defaults set in game starts with nothing"): the mod's own stores that
+     * are not in {@code shared/} ({@link Settings#gameStore}).
+     */
+    static BotData shared(Path folder, String name, String whose) {
         if (!STORE.matcher(name).matches()) {
             throw new IllegalArgumentException("a shared store's name is lower case letters, digits, _ and -: " + name);
         }
-        return SHARED.computeIfAbsent(folder.resolve(name + ".json"), f -> read(f, "the shared store " + name));
+        return SHARED.computeIfAbsent(folder.resolve(name + ".json"), f -> read(f, whose));
     }
 
     /** The shared stores that changed, written: on the writer's thread, or {@code now}, here. */

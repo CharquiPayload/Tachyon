@@ -1,13 +1,27 @@
 package tachyon;
 
 import com.google.gson.JsonElement;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -17,9 +31,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Settings: the declared default, the server's over it, the bot's own over both; and the
- * words a value is set with. A switch and a number of the test's own, over properties
- * of its own, as tachyon.properties would give them.
+ * Settings: the four layers (the declared default, tachyon.properties' over it, the one set
+ * in game over that, the bot's own over all), the words a value is set with, who may set
+ * it, and the words the menu shows it with. A switch and a number of the test's own, over
+ * properties of its own, as tachyon.properties would give them, and a defaults file of its
+ * own, as the world would keep it.
  */
 class SettingsTest {
 
@@ -33,9 +49,24 @@ class SettingsTest {
     @BeforeEach
     void setUp() {
         settings = new Settings(key -> server.getProperty("default." + key));
-        settings.bool("sprint", true, "whether it may sprint when walking", Settings.Who.OWNER);
-        settings.number("gap", 3, 1, 10, "how far it keeps", Settings.Who.OPERATOR);
+        settings.bool("sprint", true, "whether it may sprint when walking", Settings.Who.OWNER)
+                .label("Sprint when walking").group("Walking").basic();
+        settings.number("gap", 3, 1, 10, "how far it keeps", Settings.Who.OPERATOR)
+                .label("Gap").group("Walking").advanced();
         data = BotData.load(dir, "Ada");
+    }
+
+    /** Nothing left waiting to be written: what waits is shared by every test. */
+    @AfterEach
+    void written() {
+        BotData.awaitWrites(5000);
+    }
+
+    /** The defaults set in game, from a file of the test's own (none there: empty). */
+    private BotData game() {
+        BotData store = BotData.shared(dir, "defaults", "the test's defaults");
+        settings.game(store);
+        return store;
     }
 
     private double value(String key) {
@@ -173,6 +204,25 @@ class SettingsTest {
         assertEquals("2.5", settings.get("gap").words(2.5));
     }
 
+    /**
+     * The menu changes a number by turning the new value into words and setting those, as
+     * a command would: so a value's words must read back as that value. Java prints very
+     * small and very big numbers as "1.0E-4", which a player never types and parse refuses.
+     */
+    @Test
+    @DisplayName("a number's words are plain digits, never 1.0E-4, and read back as the same value")
+    void wordsReadBack() {
+        Settings.Setting tiny = settings.number("tiny", 0.5, 0.0001, 1, "how little", Settings.Who.OWNER);
+        assertEquals("0.0001", tiny.words(0.0001));
+        assertEquals("-0.25", tiny.words(-0.25));
+        assertEquals("100000000000000000000", tiny.words(1e20));
+        for (double v : new double[]{0.0001, 0.00001234, 0.5, 2.5, -0.25, 3, 1e7, 12345678.9, 1e20}) {
+            assertEquals(v, tiny.parse(tiny.words(v)), tiny.words(v));
+        }
+        assertNull(settings.set(data, "tiny", tiny.words(tiny.clamp(0.5 - 1))), "the lowest value, set through its words");
+        assertEquals(0.0001, settings.value(data, "tiny"));
+    }
+
     @Test
     @DisplayName("declaring mistakes are said at once, and so is reading what nobody declared")
     void mistakes() {
@@ -188,5 +238,202 @@ class SettingsTest {
             assertThrows(IllegalArgumentException.class,
                     () -> settings.bool(brains, true, "a brain's key", Settings.Who.OWNER), brains);
         }
+    }
+
+    // --- the four layers ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a bot's own value, else the default set in game, else tachyon.properties', else the declared one; and which")
+    void fourLayers() {
+        Settings.Setting gap = settings.get("gap");
+        assertEquals(3, value("gap"));
+        assertEquals(Settings.From.MOD, settings.from(data, gap));
+
+        server.setProperty("default.gap", "5");
+        settings.forget();          // tachyon.properties read again, as brain reload does
+        assertEquals(5, value("gap"));
+        assertEquals(Settings.From.FILE, settings.from(data, gap));
+
+        game();
+        assertNull(settings.changeDefault("gap", "7", true));
+        assertEquals(7, value("gap"));
+        assertEquals(Settings.From.GAME, settings.from(data, gap));
+        assertEquals(Settings.From.GAME, settings.defaultFrom(gap));
+        assertEquals(5, settings.withoutGame(gap), "what clearing it goes back to");
+
+        assertNull(settings.set(data, "gap", "9"));
+        assertEquals(9, value("gap"));
+        assertEquals(Settings.From.OWN, settings.from(data, gap));
+        assertEquals(7, settings.serverDefault(gap), "the server's default under it is unchanged");
+
+        // Each taken away, the next one under it shows.
+        assertNull(settings.set(data, "gap", "default"));
+        assertEquals(7, value("gap"));
+        assertNull(settings.changeDefault("gap", "default", true));
+        assertEquals(5, value("gap"));
+        assertEquals(Settings.From.FILE, settings.from(data, gap));
+        server.remove("default.gap");
+        settings.forget();
+        assertEquals(3, value("gap"));
+        assertEquals(Settings.From.MOD, settings.from(data, gap));
+    }
+
+    @Test
+    @DisplayName("no store open (no world running): no default set in game, and none can be set")
+    void noStore() {
+        assertNull(settings.inGame(settings.get("sprint")));
+        assertEquals("the server's defaults are not open: the world is not running",
+                settings.changeDefault("sprint", "false", true));
+        assertEquals(1, value("sprint"));
+    }
+
+    @Test
+    @DisplayName("a default set in game is refused as the command refuses it: operators only, a value within range")
+    void changeDefaultChecks() {
+        BotData store = game();
+        assertEquals("only operators change the server's defaults", settings.changeDefault("sprint", "false", false));
+        assertEquals("gap is a number from 1 to 10 (or default)", settings.changeDefault("gap", "11", true));
+        assertEquals("sprint is true or false (or default)", settings.changeDefault("sprint", "maybe", true));
+        assertTrue(settings.changeDefault("fly", "true", true).startsWith("no setting fly"));
+        assertFalse(store.dirty(), "refused: nothing to write");
+        assertNull(settings.inGame(settings.get("sprint")));
+    }
+
+    @Test
+    @DisplayName("the defaults set in game are written at once, whole, to defaults.json, and read back from it")
+    void defaultsFile() throws IOException {
+        game();
+        assertNull(settings.changeDefault("sprint", "off", true));
+        assertNull(settings.changeDefault("gap", "4.5", true));
+        BotData.awaitWrites(5000);
+        Path file = dir.resolve("defaults.json");
+        JsonObject kept = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8)).getAsJsonObject();
+        assertEquals(JsonParser.parseString("{\"settings\": {\"sprint\": false, \"gap\": 4.5}}"), kept);
+        assertFalse(Files.exists(dir.resolve("defaults.json.tmp")), "written beside it, then moved over it");
+
+        // Another server reading the same world: the same defaults. (Read afresh: the
+        // shared stores are kept by file while a server runs.)
+        Settings again = new Settings(key -> null);
+        again.bool("sprint", true, "whether it may sprint when walking", Settings.Who.OWNER);
+        again.number("gap", 3, 1, 10, "how far it keeps", Settings.Who.OPERATOR);
+        again.game(BotData.load(dir, "defaults"));
+        assertEquals(0, again.serverDefault(again.get("sprint")));
+        assertEquals(4.5, again.serverDefault(again.get("gap")));
+    }
+
+    @Test
+    @DisplayName("a broken defaults.json is moved aside, and there are no defaults set in game")
+    void brokenDefaultsFile() throws IOException {
+        Files.writeString(dir.resolve("defaults.json"), "{\"settings\": {\"sprint\": fal", StandardCharsets.UTF_8);
+        server.setProperty("default.sprint", "false");
+        game();
+        assertEquals(0, value("sprint"), "tachyon.properties' shows");
+        assertEquals(Settings.From.FILE, settings.from(data, settings.get("sprint")));
+        try (Stream<Path> files = Files.list(dir)) {
+            List<String> names = files.map(f -> f.getFileName().toString()).toList();
+            assertFalse(names.contains("defaults.json"), names.toString());
+            assertTrue(names.stream().anyMatch(n -> n.startsWith("defaults.json.bad-")), names.toString());
+        }
+    }
+
+    @Test
+    @DisplayName("who may change a bot's setting: its owner, or operators only when it is theirs; the same words as the command")
+    void whoMayChange() {
+        assertEquals("only operators change gap", settings.change(data, "gap", "5", false));
+        assertNull(settings.own(data, settings.get("gap")), "refused: unchanged");
+        assertFalse(data.dirty());
+        assertNull(settings.change(data, "gap", "5", true));
+        assertEquals(5, value("gap"));
+        assertNull(settings.change(data, "sprint", "false", false), "an owner's setting: anyone who may order the bot");
+        assertEquals("only operators change gap", settings.mayChange(settings.get("gap"), false));
+        assertNull(settings.mayChange(settings.get("sprint"), false));
+    }
+
+    // --- the words for the menu ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a setting is declared with a label, a group and a level; without them it is a mistake said at once")
+    void metadata() {
+        Settings.Setting sprint = settings.get("sprint");
+        assertEquals("Sprint when walking", sprint.label);
+        assertEquals("Walking", sprint.group);
+        assertEquals(Settings.Level.BASIC, sprint.level);
+        assertEquals(Settings.Level.ADVANCED, settings.get("gap").level);
+        settings.check();
+
+        Settings bare = new Settings(key -> null);
+        bare.bool("a", true, "a", Settings.Who.OWNER).group("G").basic();
+        assertTrue(assertThrows(IllegalStateException.class, bare::check).getMessage().contains("has no label"));
+        bare = new Settings(key -> null);
+        bare.bool("a", true, "a", Settings.Who.OWNER).label("A").basic();
+        assertTrue(assertThrows(IllegalStateException.class, bare::check).getMessage().contains("has no group"));
+        bare = new Settings(key -> null);
+        bare.bool("a", true, "a", Settings.Who.OWNER).label("A").group("G");
+        assertTrue(assertThrows(IllegalStateException.class, bare::check).getMessage().contains("has no level"));
+        bare = new Settings(key -> null);
+        bare.bool("a", true, "a", Settings.Who.OWNER).label("A label that goes on and on and on").group("G").basic();
+        assertTrue(assertThrows(IllegalStateException.class, bare::check).getMessage().contains("32 at most"));
+    }
+
+    @Test
+    @DisplayName("the settings of a level by group, the groups in the order they were first declared")
+    void groups() {
+        Settings s = new Settings(key -> null);
+        s.bool("a", true, "a", Settings.Who.OWNER).label("A").group("Life").basic();
+        s.bool("b", true, "b", Settings.Who.OWNER).label("B").group("Walking").basic();
+        s.bool("c", true, "c", Settings.Who.OWNER).label("C").group("Life").basic();
+        s.bool("d", true, "d", Settings.Who.OWNER).label("D").group("Brain").advanced();
+        Map<String, List<Settings.Setting>> basic = s.groups(Settings.Level.BASIC);
+        assertEquals(List.of("Life", "Walking"), List.copyOf(basic.keySet()));
+        assertEquals(List.of("a", "c"), basic.get("Life").stream().map(x -> x.key).toList());
+        assertEquals(List.of("Brain"), List.copyOf(s.groups(Settings.Level.ADVANCED).keySet()));
+    }
+
+    /**
+     * The README's settings table, row for row, against the settings the mod declares: key,
+     * label, group, level, who changes it, its default, and what it does (the description,
+     * with maybe a link after it). A setting added without its row, a row left after its
+     * setting went, or one that drifted from the code, fails here. The tests run in the
+     * project's folder, where the README is.
+     */
+    @Test
+    @DisplayName("the mod's own settings are the README's settings table, row for row")
+    void theModsOwnAreTheReadmesTable() throws IOException {
+        Path readme = Path.of("README.md");
+        assertTrue(Files.exists(readme), "no README at " + readme.toAbsolutePath());
+        List<String> rows = new ArrayList<>();
+        boolean in = false;
+        for (String line : Files.readAllLines(readme, StandardCharsets.UTF_8)) {
+            if (line.startsWith("| key | label")) {
+                in = true;
+            } else if (in && !line.startsWith("|")) {
+                break;
+            } else if (in && !line.startsWith("|---")) {
+                rows.add(line);
+            }
+        }
+        Settings mod = Abilities.settings();
+        mod.check();
+        Set<String> inReadme = new HashSet<>();
+        for (String row : rows) {
+            String[] cell = row.substring(1, row.length() - 1).split("\\|");
+            assertEquals(7, cell.length, row);
+            for (int i = 0; i < cell.length; i++) cell[i] = cell[i].trim();
+            String key = cell[0].replace("`", "");
+            Settings.Setting s = mod.get(key);
+            assertNotNull(s, "the README has " + key + ", which the mod does not declare");
+            assertTrue(inReadme.add(key), key + " twice in the README");
+            assertEquals(s.label, cell[1], key + "'s label");
+            assertEquals(s.group, cell[2], key + "'s group");
+            assertEquals(s.level.name().toLowerCase(Locale.ROOT), cell[3], key + "'s level");
+            assertEquals(s.who == Settings.Who.OWNER ? "owner, operators" : "operators", cell[4], key + ": who changes it");
+            assertEquals("`" + s.words(s.byDefault) + "`", cell[5], key + "'s default");
+            assertEquals(s.description, cell[6].replaceAll("\\s*\\(\\[[^]]*]\\([^)]*\\)\\)$", ""), key + ": what it does");
+        }
+        Set<String> declared = new HashSet<>();
+        for (Settings.Setting s : mod.all()) declared.add(s.key);
+        assertEquals(declared, inReadme, "every setting the mod declares has its row in the README, and no other");
+        assertEquals(List.of("Walking", "Life", "Night"), List.copyOf(mod.groups(Settings.Level.BASIC).keySet()));
+        assertEquals(List.of("Brain"), List.copyOf(mod.groups(Settings.Level.ADVANCED).keySet()));
     }
 }

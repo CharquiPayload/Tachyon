@@ -14,8 +14,22 @@ import java.util.List;
 /**
  * Words to a bot from a command, as if said to it in the chat. What is said in the chat
  * itself reaches it through Bots.onChat; what it answers is its {@link Brain}'s.
+ *
+ * <p>And how big a brain it has: {@code brain_lite} sends its model only the core tools
+ * ({@link Tool#core}), for a small local model, which chooses badly among many; read where
+ * the tools are chosen ({@link Tools#offered}).
  */
 final class Talking implements Ability {
+
+    /** Whether its brain is sent only the core tools. */
+    static final String BRAIN_LITE = "brain_lite";
+
+    @Override
+    public void settings(Settings settings) {
+        // Advanced: a player on a hosted model never needs it, and it makes a bot do less.
+        settings.bool(BRAIN_LITE, false, "whether its brain is sent only the core tools, for a small local model",
+                Settings.Who.OWNER).label("Lite brain").group("Brain").advanced();
+    }
 
     @Override
     public void commands(LiteralArgumentBuilder<CommandSourceStack> tachyon, CommandBuildContext context) {

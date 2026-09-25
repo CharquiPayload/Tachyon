@@ -70,7 +70,7 @@ final class Walking implements Ability {
             Bots.orderGoto(call.bot(), speaker.blockPosition(), call.order());
             return "started walking to " + call.speakerName() + ", " + Math.round(speaker.distanceTo(call.bot().body))
                     + " blocks away; not there yet";
-        }));
+        }).core());
         tools.add(new Tool("follow", "Keep walking after a player until told to stop.",
                 List.of(Tool.optional("player", "string", "Their name; leave it out for the one speaking to you")),
                 call -> {
@@ -81,7 +81,7 @@ final class Walking implements Ability {
                     if (leader == call.bot().body) return "you cannot follow yourself";
                     Bots.orderFollow(call.bot(), leader, call.order());
                     return "following " + who;
-                }));
+                }).core());
         tools.add(new Tool("go_to", "Walk to a place.",
                 List.of(Tool.param("x", "integer", "X"), Tool.param("y", "integer", "Y"), Tool.param("z", "integer", "Z")),
                 call -> {
@@ -91,15 +91,16 @@ final class Walking implements Ability {
                     return "started walking to " + Brain.pos(to) + ", "
                             + Math.round(Math.sqrt(to.distToCenterSqr(call.bot().body.position())))
                             + " blocks away; not there yet";
-                }));
+                }).core());
         tools.add(new Tool("stop", "Stop what you are doing and stand still.", List.of(), call -> {
             Bots.orderStop(call.bot());
             return "standing still";
-        }));
+        }).core());
     }
 
     @Override
     public void settings(Settings settings) {
-        settings.bool(SPRINT, true, "whether it may sprint when walking", Settings.Who.OWNER);
+        settings.bool(SPRINT, true, "whether it may sprint when walking", Settings.Who.OWNER)
+                .label("Sprint when walking").group("Walking").basic();
     }
 }

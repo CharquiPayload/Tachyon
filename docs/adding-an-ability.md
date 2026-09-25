@@ -8,8 +8,12 @@ one does not mean editing them. The other way round, an ability uses what
 `Bots` and `Brain` offer: the command helpers, the orders, the legs, a bot's
 data, the brain's notices.
 
-One exception, on purpose: Walking's `sprint` setting is read in
-`Bots.canRun`, because the legs (routes, keys, doors) live in `Bots`.
+Three exceptions, on purpose, because what they decide lives in the core:
+Walking's `sprint` setting is read in `Bots.canRun`, where the legs (routes,
+keys, doors) are; `Bots.died` asks `Respawning.staysDead` whether a bot that
+died comes back (its `respawn` setting, and the deaths it counts), since a bot's
+coming and going is there; and `Tools.offered` reads Talking's `brain_lite`,
+since which tools a brain is sent is decided there.
 
 This page is for whoever adds the next one. Read `Walking.java`, `Hunting.java`
 and `Hunt.java` alongside it: they are the smallest complete examples.
@@ -52,7 +56,7 @@ key that is not lower case) stops the server's start, where it is seen at once.
 
 | hook | when | for |
 |---|---|---|
-| `events(bus)` | the mod is made | its own `@SubscribeEvent` handlers: `bus.register(this)` |
+| `events(bus)` | the mod is made | its own handlers of the game's events: `bus.addListener(ServerStartedEvent.class, e -> ...)`, or `bus.register(this)` for `@SubscribeEvent` methods |
 | `tools(tools)` | the abilities are gathered | the brain's tools |
 | `settings(settings)` | the abilities are gathered | the settings it declares |
 | `commands(tachyon, context)` | the server registers its commands | subcommands under `/tachyon` |
@@ -67,7 +71,7 @@ them.
 |---|---|---|
 | `joined(bot)` | a bot came in, its data already read | picking up what it kept |
 | `left(bot)` | a bot is leaving, before its data is written | putting away what it keeps |
-| `died(bot, cause)` | its body died, before `left` | what killed it |
+| `died(bot, cause)` | its body died, its order as it was: then it comes back 2 s later (a new body, its order dropped; one given to it while dead is carried out then), or leaves (`left` follows) | what killed it |
 | `hurt(bot, source, amount)` | it lost health | being hit: by whom, how much |
 | `tick(bot, now)` | every tick, before its job thinks | a reflex |
 | `act(bot, now)` | every tick, after the walk's keys, before the job's hands | a reflex's hands |
@@ -80,6 +84,20 @@ them.
 In `left`, `bot.leaving()` says why (`REMOVED`, `DIED`, `STOPPING`); the bot
 is still among `Bots.all()`, and its order is as it was (its job, where it
 went), so what it was doing can be kept.
+
+**The body changes.** A bot that dies and comes back is the same `Bots.Bot` (its
+data, its slots, its brain), with a new `BotPlayer`: `bot.body` is another
+object after a respawn, as a player's is. Read `bot.body` where it is used, and
+never keep it (in a job's field, a slot, a record): what is kept is a corpse. A
+`ServerPlayer` kept for another reason has the same trouble when that player
+respawns: whom a bot follows is kept up to date by `Bots` (from NeoForge's
+`PlayerEvent.Clone`, which a respawn posts, a bot's too); an ability that keeps a
+player does the same in a handler of its own, or keeps the UUID instead.
+
+A death may come in the middle of the bot's own tick: a job's hit that thorns
+pays back, a reflex's. It drops the bot's order there and then, so code that
+called what killed it finds `bot.job` null afterwards, and must look before it
+goes on (as `Bots.pilot` does).
 
 For anything else of the game's (a block placed, an item picked up, a
 player's death), an ability registers handlers of its own in `events`.
@@ -128,7 +146,8 @@ What `Bots` has for commands (all package-visible):
 
 A subcommand is added to `tachyon` only: never `.requires` on `tachyon`
 itself. One whose name is taken (by another ability, or the mod's own `spawn`,
-`remove`, `settings`, `set`, `owner`, `brain`, `list`, `stats`) stops the start.
+`remove`, `settings`, `set`, `defaults`, `config`, `owner`, `brain`, `list`,
+`stats`) stops the start.
 
 Answers are plain and short, in the words the rest of the mod uses: "hunting
 cow, 2 each", "no bot of yours matches X", "a box of 200000 blocks: 100000 at
@@ -227,9 +246,16 @@ More a tool may have, set as it is made:
 - `.rule("...")`: a line for the brain's instructions while it has the tool,
   when the description cannot say when or how to use it. Paid for on every
   turn: short.
+- `.core()`: one of the core tools, those a bot with a lite brain
+  (`brain_lite`, for a small local model) is sent too; a full brain is sent
+  every tool. A small model chooses badly among many: a tool is core when a bot
+  is of little use without it, and most new ones are not.
 - `.offeredWhen(bot -> ...)`: offered only to some bots (a setting, a
-  permission, a lite brain). A tool not offered is not sent: the model neither
-  sees nor calls it. Asked on the server's thread as each turn starts.
+  permission). A tool not offered is not sent, and a call of it that turn (the
+  model saw it in an earlier one, or guessed its name) is answered "there is no
+  tool ...": the model neither sees nor runs it. Asked on the server's thread as
+  each turn starts. The same holds for a lite brain and the tools that are not
+  core.
 - `Tool.later(name, description, params, call -> future)`: a tool whose
   answer takes long to find (a search over many blocks). It starts on the
   server's thread, takes what it needs of the world there (a `SnapshotWorld`),
@@ -238,8 +264,9 @@ More a tool may have, set as it is made:
 
 The tools are sent to the model in `Abilities`' order. A tool changes what the
 model is sent, and so how every bot behaves: its name and description are
-behaviour, as much as its handler. `ToolsTest` holds the eight tools of 0.1.0
-to the byte; new tools come among them without touching them.
+behaviour, as much as its handler. `ToolsTest` holds the eight core tools to
+the byte (`core-tools.json`: those of 0.1.0, with hunt's `mob` mended); new tools
+come among them without touching them.
 
 ## The brain
 
@@ -263,15 +290,18 @@ Every word added here is sent, and paid for, on every turn of every bot.
 ## Settings
 
 A setting is a switch or a number that says how a bot goes about what it does,
-with a value of its own for each bot. Declare it:
+with a value of its own for each bot. Declare it, with the words the config menu
+shows it with:
 
 ```java
 static final String TORCHES = "torches";
 
 @Override
 public void settings(Settings settings) {
-    settings.bool(TORCHES, true, "whether it lights the tunnels it digs", Settings.Who.OWNER);
-    settings.number("follow_gap", 3, 1, 10, "how far it keeps from whom it follows", Settings.Who.OWNER);
+    settings.bool(TORCHES, true, "whether it lights the tunnels it digs", Settings.Who.OWNER)
+            .label("Light tunnels").group("Mining").basic();
+    settings.number("follow_gap", 3, 1, 10, "how far it keeps from whom it follows", Settings.Who.OWNER)
+            .label("Following distance").group("Walking").advanced();
 }
 ```
 
@@ -283,19 +313,38 @@ double gap = Settings.number(p, "follow_gap");
 ```
 
 - **Keys** are lower case, digits and `_`, and never change once released:
-  they are in the bots' saved data and in `tachyon.properties`. `url`,
-  `model`, `key` and `timeout` are the brain's, and refused.
+  they are in the bots' saved data, in `defaults.json` and in
+  `tachyon.properties`. `url`, `model`, `key` and `timeout` are the brain's, and
+  refused.
 - **The description** says what it decides, as "whether it ..." or "how far
-  ...": `/tachyon settings` shows it.
+  ...": `/tachyon settings` shows it, and the menu under the setting's name.
 - **Who**: `OWNER` (its owner and operators may change it) for what concerns
   only the bot; `OPERATOR` for what concerns the server (what it may break,
-  whom it may fight).
-- **The value** a bot has is its own if it has one (`/tachyon set`), else the
-  server's default (`default.<key>=...` in `tachyon.properties`), else the
+  whom it may fight). The menu shows an operators' setting to anyone else as
+  locked.
+- **The label** is the setting's name in the menu: a few words a player would
+  say, 32 characters at most ("Come back after dying", not "respawn toggle").
+- **The group** puts it in a row with the settings of the same kind: a word or
+  two, spelled exactly as the others of that kind spell it ("Walking", "Life",
+  "Night", "Brain"), or it is a group of its own. Groups are shown in the order
+  their first setting was declared, that is the abilities' order.
+- **The level**: `.basic()` for what most owners will want to change, shown
+  first; `.advanced()` for the rest, behind the menu's "Advanced" button. The
+  mod is meant to be very configurable without drowning players in options:
+  when in doubt, advanced.
+- A setting without a label, a group or a level is a mistake, said as the server
+  starts (`Settings.check`, from `Abilities`).
+- **The value** a bot has is the first of four layers that has one: its own
+  (`/tachyon set`, the menu), the server's default set in game
+  (`/tachyon defaults`, the menu's Server defaults: `<world>/tachyon/defaults.json`),
+  the server's default in `tachyon.properties` (`default.<key>=...`), the
   declared default. A number read is always within its range.
 - A read is a lookup in the bot's data and, when it has no value of its own,
-  one in the server's defaults, parsed once and kept until
-  `/tachyon brain reload`: cheap enough for every tick.
+  one in the defaults set in game, then one in `tachyon.properties`' defaults,
+  parsed once and kept until `/tachyon brain reload`: cheap enough for every
+  tick.
+- A change of a setting is not announced: code that must act when one changes
+  (a count taken again) looks at it every so often, as `Sleeping`'s reflex does.
 
 ## Reflexes
 
@@ -394,13 +443,27 @@ gone when the bot leaves. Never a field added to `Bots.Bot` for one ability.
   as the player's own save is; and at the server's stop the files are written
   there, since nothing runs after it.
 
+## Minecraft's own code
+
+When no NeoForge event fits (the count of sleepers has none), a mixin changes
+Minecraft's class: in the package `tachyon.mixin`, listed in the `server` list
+of `src/main/resources/tachyon.mixins.json` (the mod is only ever on a dedicated
+server). Keep it to one small change, with a comment saying why no event does,
+and have it call a `public static` method of the ability, which decides: the
+mixin's code runs inside Minecraft's class, in another package. `SleepStatusMixin`
+and `Sleeping.counted` are the example. To reach a field Minecraft keeps private,
+an `@Accessor` interface (`PlayerListAccess`).
+
 ## Before it is done
 
 - `./gradlew build`: it compiles and every test passes, the old ones too.
 - `./gradlew runServer`: try it in a game, with the commands and, when it has
   tools, with a bot spoken to (every word said to a bot is a paid call to a
   model: a few are enough).
-- The README: its commands in the table, its settings in the settings table,
-  and a line on what it does if players will ask.
+- The README: its commands in the table, its settings in the settings table
+  (key, label, group, level, who, default, what), and a line on what it does if
+  players will ask. `SettingsTest` reads the README's settings table and holds
+  it to the settings the mod declares, row for row: a new setting fails it until
+  its row is there.
 - `/tachyon stats` with many bots, if it adds a reflex or a heavy job: what it
   costs the tick.

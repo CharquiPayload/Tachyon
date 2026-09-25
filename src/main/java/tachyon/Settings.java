@@ -13,8 +13,11 @@ import com.mojang.logging.LogUtils;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -22,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,26 +36,37 @@ import java.util.regex.Pattern;
  * The switches and numbers the abilities declare, which say how a bot goes about what it
  * does (whether it sprints, say), each bot with values of its own.
  *
- * <p>Two layers. Under, the server's default: {@code default.<key>=...} in
- * {@code tachyon.properties}, or else the one the ability declared. Over it, the bot's
- * own value, set with {@code /tachyon set} and kept in its data (section
- * {@code settings}), so it stays across leaving and coming back. Who may change a
- * setting is declared with it: its owner (and operators), or operators only.
+ * <p>Four layers; a bot's value is the first of them that has one:
+ * <ol>
+ * <li>the bot's own, set with {@code /tachyon set} or the menu ({@link ConfigMenu}), kept
+ *     in its data (section {@code settings}), so it stays across leaving and coming back;</li>
+ * <li>the server's default set in game by operators ({@code /tachyon defaults}, or the
+ *     menu), kept with the world in {@code <world>/tachyon/defaults.json} (the same
+ *     section): see {@link #gameStore};</li>
+ * <li>the server's default in {@code tachyon.properties}, {@code default.<key>=...};</li>
+ * <li>the one the ability declared.</li>
+ * </ol>
+ * {@link From} says which one a value comes from. Who may change a setting is declared
+ * with it: its owner (and operators), or operators only. So are the words the menu shows
+ * it with: a label, a group, and a level (basic, shown first; advanced, behind a button).
  *
  * <p>The code reads them with {@link #bool(Bots.Bot, String)} and
  * {@link #number(Bots.Bot, String)}, on the server's thread, as a bot's data is. A read is
- * a lookup in the bot's data, then, when it has no value of its own, in the server's
- * defaults, parsed once and kept until {@code /tachyon brain reload}. A number read is
- * always within its range: one out of it (a server default, a file edited by hand) is
- * brought to the nearest end; the command refuses it, saying the range.
+ * a lookup in the bot's data, then, when it has no value of its own, one in the defaults
+ * set in game, then one in tachyon.properties' defaults, parsed once and kept until
+ * {@code /tachyon brain reload}. A number read is always within its range: one out of it (a
+ * server default, a file edited by hand) is brought to the nearest end; the commands and
+ * the menu refuse it, saying the range.
  */
 final class Settings {
 
     private static final Logger LOG = LogUtils.getLogger();
-    /** The section of a bot's data its own values are kept in. */
+    /** The section of a bot's data its own values are kept in; and of the defaults set in game, those. */
     static final String SECTION = "settings";
     private static final Pattern KEY = Pattern.compile("[a-z][a-z0-9_]*");
     private static final Pattern NUMBER = Pattern.compile("-?\\d+(\\.\\d+)?");
+    /** A label is a few words: the menu shows it as an item's name. */
+    static final int LABEL_MAX = 32;
     /**
      * Keys no setting may have: a server default is {@code default.<key>} in
      * tachyon.properties, and {@code default.url} (model, key, timeout) is also how the
@@ -68,8 +83,39 @@ final class Settings {
     }
 
     /**
+     * Where the menu shows a setting: among the first ones, or behind its "Advanced" button.
+     * The plan is that a player finds what they want without wading through the rest.
+     */
+    enum Level {
+        /** What most owners will want to change: shown first. */
+        BASIC,
+        /** For whoever knows what they are after: behind the "Advanced" button. */
+        ADVANCED
+    }
+
+    /** Which of the four layers a value comes from: the first that has one. */
+    enum From {
+        OWN("its own"),
+        GAME("server default, set in game"),
+        FILE("server default, in tachyon.properties"),
+        MOD("the mod's default");
+
+        /** As {@code /tachyon settings} and the menu say it. */
+        final String words;
+
+        From(String words) {
+            this.words = words;
+        }
+    }
+
+    /**
      * One setting, as declared: a switch (true or false), or a number within its range.
      * Values are held as numbers either way: a switch's are 1 and 0.
+     *
+     * <p>Its words for the menu are given as it is declared, one after another:
+     * {@code settings.bool(...).label("Sprint when walking").group("Walking").basic()}. They
+     * are set there and never after; a setting without them is a mistake, said as the server
+     * starts ({@link #check}).
      */
     static final class Setting {
         final String key;
@@ -78,6 +124,12 @@ final class Settings {
         /** What it decides, as "whether it may sprint when walking". */
         final String description;
         final Who who;
+        /** Its short name in the menu, a few words: "Come back after dying". */
+        String label;
+        /** The group the menu shows it in, with the others of that name: "Walking", "Life". */
+        String group;
+        /** Whether the menu shows it first, or behind the "Advanced" button. */
+        Level level;
 
         private Setting(String key, boolean isSwitch, double byDefault, double min, double max, String description, Who who) {
             this.key = key;
@@ -89,10 +141,43 @@ final class Settings {
             this.who = who;
         }
 
-        /** A value in words: true or false, or the number (a whole one without its ".0"). */
+        /** Its short name in the menu: a few words, as a player would say it ("Sprint when walking"). */
+        Setting label(String label) {
+            this.label = label;
+            return this;
+        }
+
+        /**
+         * The group the menu shows it in: a word or two, the same for every setting of one
+         * kind ("Walking", "Life", "Night", "Brain"), and spelled the same, or it is another group.
+         */
+        Setting group(String group) {
+            this.group = group;
+            return this;
+        }
+
+        /** Shown first: what most owners will want to change. */
+        Setting basic() {
+            this.level = Level.BASIC;
+            return this;
+        }
+
+        /** Behind the menu's "Advanced" button: what few will change, or only knowing why. */
+        Setting advanced() {
+            this.level = Level.ADVANCED;
+            return this;
+        }
+
+        /**
+         * A value in words: true or false, or the number, in plain digits (a whole one
+         * without its ".0"). Never Java's "1.0E-4": the menu turns a number it changed into
+         * words and back through {@link #parse}, which takes plain digits only, as a player
+         * types them.
+         */
         String words(double v) {
             if (isSwitch) return v != 0 ? "true" : "false";
-            return v == Math.rint(v) && Math.abs(v) < 1e15 ? String.valueOf((long) v) : String.valueOf(v);
+            if (v == Math.rint(v) && Math.abs(v) < 1e15) return String.valueOf((long) v);
+            return BigDecimal.valueOf(v).stripTrailingZeros().toPlainString();
         }
 
         /** What it takes, in words, for a refusal. */
@@ -136,8 +221,16 @@ final class Settings {
     private final Function<String, String> server;
     /** The server defaults that could not be read, said once each. */
     private final Set<String> warned = ConcurrentHashMap.newKeySet();
-    /** The server defaults as read from tachyon.properties, parsed: read once, until {@link #forget}. */
-    private final Map<String, Double> defaults = new ConcurrentHashMap<>();
+    /**
+     * The server defaults as read from tachyon.properties, parsed (empty: none there that is
+     * a value): read once, until {@link #forget}.
+     */
+    private final Map<String, Optional<Double>> fileDefaults = new ConcurrentHashMap<>();
+    /**
+     * The server's defaults set in game, while a server runs (null before, and in a test that
+     * gives none): {@code <world>/tachyon/defaults.json}, the server thread's as a bot's data is.
+     */
+    private BotData game;
 
     Settings(Function<String, String> server) {
         this.server = server;
@@ -170,6 +263,29 @@ final class Settings {
         return s;
     }
 
+    /**
+     * Every setting has its words for the menu: a label of a few words, a group, a level.
+     * Asked once every ability has declared its own (see Abilities): one without them is a
+     * mistake of ours, said as the server starts, where it is seen at once.
+     */
+    void check() {
+        for (Setting s : declared.values()) {
+            if (s.label == null || s.label.isBlank()) {
+                throw new IllegalStateException("setting " + s.key + " has no label: declare it with .label(\"A few words\")");
+            }
+            if (s.label.length() > LABEL_MAX) {
+                throw new IllegalStateException("setting " + s.key + ": its label is " + s.label.length()
+                        + " characters, " + LABEL_MAX + " at most (the description says the rest)");
+            }
+            if (s.group == null || s.group.isBlank()) {
+                throw new IllegalStateException("setting " + s.key + " has no group: declare it with .group(\"Walking\") or the like");
+            }
+            if (s.level == null) {
+                throw new IllegalStateException("setting " + s.key + " has no level: declare it with .basic() or .advanced()");
+            }
+        }
+    }
+
     /** The one called so, or null. */
     Setting get(String key) {
         return declared.get(key);
@@ -177,6 +293,19 @@ final class Settings {
 
     Collection<Setting> all() {
         return Collections.unmodifiableCollection(declared.values());
+    }
+
+    /**
+     * The settings of one level, by group: the groups in the order their first setting of
+     * that level was declared (the abilities' order), each with its settings in theirs.
+     * What a page of the menu shows.
+     */
+    Map<String, List<Setting>> groups(Level level) {
+        Map<String, List<Setting>> out = new LinkedHashMap<>();
+        for (Setting s : declared.values()) {
+            if (s.level == level) out.computeIfAbsent(s.group, g -> new ArrayList<>()).add(s);
+        }
+        return out;
     }
 
     // --- reading ---------------------------------------------------------------------------
@@ -213,38 +342,91 @@ final class Settings {
         return own != null ? own : serverDefault(s);
     }
 
+    /** Which layer the bot's value comes from. */
+    From from(BotData data, Setting s) {
+        return own(data, s) != null ? From.OWN : defaultFrom(s);
+    }
+
     /** The bot's own value, or null when it has none. Reading makes no section. */
     Double own(BotData data, Setting s) {
         JsonElement e = data.read(SECTION).get(s.key);
         return e == null ? null : s.read(e);
     }
 
-    /** The server's default: tachyon.properties' {@code default.<key>}, else the declared one. */
+    /**
+     * The server's default, for every bot without a value of its own: the one set in game,
+     * else tachyon.properties' {@code default.<key>}, else the declared one.
+     */
     double serverDefault(Setting s) {
-        Double known = defaults.get(s.key);
-        if (known != null) return known;
-        double v = readServerDefault(s);
-        defaults.put(s.key, v);
-        return v;
+        Double set = inGame(s);
+        return set != null ? set : withoutGame(s);
+    }
+
+    /** Which layer the server's default comes from: set in game, tachyon.properties, or the mod. */
+    From defaultFrom(Setting s) {
+        if (inGame(s) != null) return From.GAME;
+        return fileDefault(s) != null ? From.FILE : From.MOD;
+    }
+
+    /**
+     * The server's default as it is without the one set in game: tachyon.properties', else
+     * the declared one. What clearing the one set in game goes back to.
+     */
+    double withoutGame(Setting s) {
+        Double file = fileDefault(s);
+        return file != null ? file : s.byDefault;
+    }
+
+    /** The default set in game, or null when there is none (or no server runs). */
+    Double inGame(Setting s) {
+        return game == null ? null : own(game, s);
+    }
+
+    /** tachyon.properties' {@code default.<key>}, parsed and within range; null when it has none that is a value. */
+    private Double fileDefault(Setting s) {
+        Optional<Double> known = fileDefaults.get(s.key);
+        if (known == null) {
+            known = Optional.ofNullable(readFileDefault(s));
+            fileDefaults.put(s.key, known);
+        }
+        return known.orElse(null);
     }
 
     /** tachyon.properties was read again: the server's defaults are read again from it, as they are next asked for. */
     void forget() {
-        defaults.clear();
+        fileDefaults.clear();
     }
 
-    private double readServerDefault(Setting s) {
+    private Double readFileDefault(Setting s) {
         String text = server.apply(s.key);
-        if (text == null || text.isBlank()) return s.byDefault;
+        if (text == null || text.isBlank()) return null;
         Double v = s.parse(text);
         if (v == null) {
             if (warned.add(s.key + "=" + text)) {
-                LOG.warn("[tachyon] tachyon.properties: default.{}={} is no value for it ({}): {} is used",
-                        s.key, text, s.takes(), s.words(s.byDefault));
+                LOG.warn("[tachyon] tachyon.properties: default.{}={} is no value for it ({}): it is not used",
+                        s.key, text, s.takes());
             }
-            return s.byDefault;
+            return null;
         }
         return s.clamp(v);
+    }
+
+    // --- the defaults set in game ------------------------------------------------------------
+
+    /**
+     * Where the server's defaults set in game are kept: {@code <world>/tachyon/defaults.json},
+     * with the world, so that a copied world keeps them. A store kept as the shared ones are
+     * ({@link BotData#shared}): read once as the server starts, written whole or not at all,
+     * moved aside when it is broken (and then there are none). On the server's thread.
+     */
+    static BotData gameStore(MinecraftServer server) {
+        return BotData.shared(server.getWorldPath(LevelResource.ROOT).resolve("tachyon").normalize(), "defaults",
+                "the server's list of defaults set in game");
+    }
+
+    /** The defaults set in game from now on: the world's store as the server starts, null once it stops. */
+    void game(BotData store) {
+        this.game = store;
     }
 
     // --- changing ---------------------------------------------------------------------------
@@ -273,12 +455,56 @@ final class Settings {
         return null;
     }
 
+    /**
+     * A bot's own value changed by someone: the checks {@code /tachyon set} makes, and the
+     * menu with it. A setting of operators' only by an operator; then words that are a value
+     * within its range, or {@code default} ({@link #set}).
+     *
+     * @param operator whether whoever changes it is an operator
+     * @return why not, in words for them, or null once done
+     */
+    String change(BotData data, String key, String text, boolean operator) {
+        Setting s = declared.get(key);
+        String refused = s == null ? null : mayChange(s, operator);
+        return refused != null ? refused : set(data, key, text);
+    }
+
+    /** Why whoever it is may not change a bot's {@code s}, or null when they may: a setting of operators' is theirs only. */
+    String mayChange(Setting s, boolean operator) {
+        return s.who == Who.OPERATOR && !operator ? "only operators change " + s.key : null;
+    }
+
+    /** Why whoever it is may not change the server's defaults, or null when they may: operators only. */
+    String mayChangeDefault(boolean operator) {
+        return operator ? null : "only operators change the server's defaults";
+    }
+
+    /**
+     * The server's default set in game, from words, for every bot without a value of its
+     * own: the checks {@code /tachyon defaults} makes, and the menu with it. Operators only;
+     * then words that are a value within its range, or {@code default}, which clears it
+     * (tachyon.properties' or the mod's is the default again). Written at once, on the
+     * writer's thread.
+     *
+     * @return why not, in words for them, or null once done
+     */
+    String changeDefault(String key, String text, boolean operator) {
+        String refused = mayChangeDefault(operator);
+        if (refused != null) return refused;
+        if (game == null) return "the server's defaults are not open: the world is not running";
+        refused = set(game, key, text);
+        if (refused == null) game.saveLater();
+        return refused;
+    }
+
     // --- the commands ------------------------------------------------------------------------
 
     /**
      * {@code /tachyon settings <who>}: each setting, its value and where it comes from.
      * {@code /tachyon set <who> <key> <value|default>}: one changed. Anyone may use them on
      * the bots they may order (see Bots.find); a setting of operators', only operators.
+     * {@code /tachyon defaults [<key> <value|default>]}: the server's defaults, listed, or
+     * one set in game; operators only.
      */
     static void commands(LiteralArgumentBuilder<CommandSourceStack> tachyon) {
         tachyon.then(Commands.literal("settings")
@@ -289,7 +515,15 @@ final class Settings {
                                         .suggests(Settings::keys)
                                         .then(Commands.argument("value", StringArgumentType.word())
                                                 .suggests(Settings::values)
-                                                .executes(Settings::set)))));
+                                                .executes(Settings::set)))))
+                .then(Commands.literal("defaults")
+                        .requires(Bots::operator)
+                        .executes(Settings::defaults)
+                        .then(Commands.argument("key", StringArgumentType.word())
+                                .suggests(Settings::keys)
+                                .then(Commands.argument("value", StringArgumentType.word())
+                                        .suggests(Settings::values)
+                                        .executes(Settings::setDefault))));
     }
 
     private static int list(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
@@ -300,8 +534,7 @@ final class Settings {
         for (Bots.Bot p : them) {
             lines.add(p.name() + "'s settings:");
             for (Setting s : all.all()) {
-                lines.add("  " + s.key + " = " + s.words(all.value(p.data, s))
-                        + (all.own(p.data, s) != null ? " (its own)" : " (server default)")
+                lines.add("  " + s.key + " = " + s.words(all.value(p.data, s)) + " (" + all.from(p.data, s).words + ")"
                         + ": " + s.description + (s.who == Who.OPERATOR ? " [operators only]" : ""));
             }
         }
@@ -314,20 +547,42 @@ final class Settings {
         if (them.isEmpty()) return 0;
         Settings all = Abilities.settings();
         String key = StringArgumentType.getString(c, "key"), value = StringArgumentType.getString(c, "value");
-        Setting s = all.get(key);
-        if (s != null && s.who == Who.OPERATOR && !Bots.operator(c.getSource())) {
-            return Bots.fail(c.getSource(), "only operators change " + key);
-        }
+        boolean operator = Bots.operator(c.getSource());
         // The words are the same for every bot: refused for the first, refused for all,
         // and nothing changed.
         for (Bots.Bot p : them) {
-            String refused = all.set(p.data, key, value);
+            String refused = all.change(p.data, key, value, operator);
             if (refused != null) return Bots.fail(c.getSource(), refused);
         }
+        Setting s = all.get(key);
         if (value.equalsIgnoreCase("default")) {
-            return Bots.told(c, them, key + " is the server default again: " + s.words(all.serverDefault(s)));
+            return Bots.told(c, them, key + " is the server default again: " + s.words(all.serverDefault(s))
+                    + ", " + all.defaultFrom(s).words);
         }
         return Bots.told(c, them, key + " = " + s.words(all.value(them.get(0).data, s)) + " (its own)");
+    }
+
+    /** {@code /tachyon defaults}: every setting's server default, and where it comes from. */
+    private static int defaults(CommandContext<CommandSourceStack> c) {
+        Settings all = Abilities.settings();
+        List<String> lines = new ArrayList<>();
+        lines.add("the server's defaults, for every bot without a value of its own:");
+        for (Setting s : all.all()) {
+            lines.add("  " + s.key + " = " + s.words(all.serverDefault(s)) + " (" + all.defaultFrom(s).words + ")"
+                    + ": " + s.description);
+        }
+        return Bots.say(c.getSource(), String.join("\n", lines));
+    }
+
+    /** {@code /tachyon defaults <key> <value|default>}: one server default set in game, or cleared. */
+    private static int setDefault(CommandContext<CommandSourceStack> c) {
+        Settings all = Abilities.settings();
+        String key = StringArgumentType.getString(c, "key"), value = StringArgumentType.getString(c, "value");
+        String refused = all.changeDefault(key, value, Bots.operator(c.getSource()));
+        if (refused != null) return Bots.fail(c.getSource(), refused);
+        Setting s = all.get(key);
+        return Bots.say(c.getSource(), key + "'s server default: " + s.words(all.serverDefault(s)) + " ("
+                + all.defaultFrom(s).words + "), for every bot without a value of its own");
     }
 
     /** The keys, those of operators' only for operators. */

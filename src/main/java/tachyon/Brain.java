@@ -13,9 +13,11 @@ import org.slf4j.Logger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -35,7 +37,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * slow answer, not a slow server. What it is told of the bot (its instructions, its
  * state, the tools it is offered) is read on the server's thread as each turn starts,
  * and the tools run there, where the world is. One thing at a time: what is said while
- * it thinks waits, the last of it.
+ * it thinks waits, the last of it. So does what is said while it lies dead, the 2 s
+ * before it comes back ({@link #back}): a turn is about a bot that can do something.
  *
  * <p>An order given in the chat that is over by itself (done, or given up) is news: the
  * brain is told, with no tools, and says how it went to whoever gave it. What an ability
@@ -85,8 +88,12 @@ final class Brain {
     private record Said(UUID who, String name, String text, Kind kind) {
     }
 
-    /** What the model is told of the bot as a turn starts: read on the server's thread. */
-    private record Start(String prompt, String state, JsonArray tools) {
+    /**
+     * What the model is told of the bot as a turn starts: read on the server's thread.
+     * {@code offered}: the names of the tools it is sent, the only ones a call of this turn
+     * may run.
+     */
+    private record Start(String prompt, String state, JsonArray tools, Set<String> offered) {
     }
 
     /**
@@ -115,6 +122,11 @@ final class Brain {
         return thinking != null && !thinking.isDone();
     }
 
+    /** Whether a turn waits instead of starting now: one runs already, or its bot lies dead. On the server's thread. */
+    private boolean waits() {
+        return busy() || !p.body.isAlive();
+    }
+
     /** Why its last turn failed, or null when it went well (or there was none). */
     String failure() {
         return failure;
@@ -127,8 +139,8 @@ final class Brain {
             return;
         }
         Said said = new Said(who, name, text, Kind.WORDS);
-        if (busy()) {
-            waiting = said;         // the last thing said, after this one
+        if (waits()) {
+            waiting = said;         // the last thing said, after this one (or once it is back)
             return;
         }
         thinking = THINK.submit(() -> think(said));
@@ -138,7 +150,7 @@ final class Brain {
     void over(UUID who, String name, String how) {
         if (config().url(p.name()).isEmpty()) return;
         Said news = new Said(who, name, how, Kind.NEWS);
-        if (busy()) {
+        if (waits()) {
             if (waiting == null) waiting = news;        // never instead of what a player said
             return;
         }
@@ -157,7 +169,7 @@ final class Brain {
     void notice(String text) {
         if (config().url(p.name()).isEmpty()) return;
         Said n = new Said(p.owner, p.ownerName == null ? "nobody" : p.ownerName, text, Kind.NOTICE);
-        if (busy()) {
+        if (waits()) {
             if (notices.size() >= NOTICES_MAX) notices.removeFirst();
             notices.addLast(n);
             return;
@@ -169,6 +181,15 @@ final class Brain {
         if (thinking != null) thinking.cancel(true);
         waiting = null;
         notices.clear();
+    }
+
+    /**
+     * Its bot is back from the dead, in a new body: what was said to it meanwhile (or news,
+     * or a notice) is thought about now, unless a turn still runs (it follows that one). On
+     * the server's thread, from Bots.respawn.
+     */
+    void back() {
+        if (!busy()) next();
     }
 
     // --- a turn, on a brain thread -------------------------------------------------------
@@ -209,7 +230,7 @@ final class Brain {
                     break;
                 }
                 for (Llm.ToolCall call : r.calls()) {
-                    String result = result(onServer(() -> run(call, said)), cfg.timeoutSeconds(name));
+                    String result = result(onServer(() -> run(call, said, start.offered())), cfg.timeoutSeconds(name));
                     LOG.info("[tachyon] {} used {} {}: {}", name, call.name(), call.args(), result);
                     JsonObject tool = new JsonObject();
                     tool.addProperty("role", "tool");
@@ -240,12 +261,14 @@ final class Brain {
 
     /**
      * What was said while it thought, now: started here and not through hear, since the
-     * turn that ran this may not count as done yet, and it would wait for nothing.
+     * turn that ran this may not count as done yet, and it would wait for nothing. While its
+     * bot lies dead it keeps waiting, for {@link #back}; once the bot left, it is dropped.
      */
     private void next() {
+        if (p.leaving() != null || !p.body.isAlive()) return;
         Said w = waiting != null ? waiting : notices.pollFirst();
         waiting = null;
-        if (w != null && p.body.isAlive() && !p.body.isRemoved() && !config().url(p.name()).isEmpty()) {
+        if (w != null && !config().url(p.name()).isEmpty()) {
             thinking = THINK.submit(() -> think(w));
         }
     }
@@ -276,7 +299,9 @@ final class Brain {
         }
         Abilities.rules(p, rules);
         String prompt = rules.isEmpty() ? prompt() : prompt() + "\n" + String.join("\n", rules);
-        return new Start(prompt, state(said), Abilities.tools().json(offered));
+        Set<String> names = new HashSet<>();
+        for (Tool t : offered) names.add(t.name);
+        return new Start(prompt, state(said), Abilities.tools().json(offered), names);
     }
 
     private String prompt() {
@@ -320,11 +345,14 @@ final class Brain {
 
     /**
      * A tool the model called, started as an order; what comes of it, in words for the
-     * model. On the server's thread: most answer here and now, a later one elsewhere.
+     * model. Only one it was sent this turn ({@code offered}): a tool a lite brain is not
+     * sent, or one not offered to this bot, is no tool to it, even when the model names it
+     * (from an earlier turn in its history, or a guess). On the server's thread: most
+     * answer here and now, a later one elsewhere.
      */
-    private CompletableFuture<String> run(Llm.ToolCall call, Said said) {
+    private CompletableFuture<String> run(Llm.ToolCall call, Said said, Set<String> offered) {
         ServerPlayer speaker = said.who() == null ? null : server.getPlayerList().getPlayer(said.who());
-        return Abilities.tools().start(call.name(), new Tool.Call(p, call.args(), speaker, said.name(), by(said)));
+        return Abilities.tools().start(call.name(), new Tool.Call(p, call.args(), speaker, said.name(), by(said)), offered);
     }
 
     /**
@@ -383,9 +411,13 @@ final class Brain {
 
     // --- words ----------------------------------------------------------------------------
 
-    /** Its answer in the chat, as a player's line: {@code <Name> ...}. */
+    /**
+     * Its answer in the chat, as a player's line: {@code <Name> ...}. Not once its bot left
+     * the game; but said while it lies dead (its corpse is out of the level after a second):
+     * it comes back, and the answer was paid for.
+     */
     private void say(String text) {
-        if (text.isEmpty() || p.body.isRemoved()) return;
+        if (text.isEmpty() || p.leaving() != null) return;
         int n = 0;
         for (String line : text.split("\\R")) {
             line = line.strip();

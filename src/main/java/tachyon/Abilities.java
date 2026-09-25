@@ -37,13 +37,17 @@ final class Abilities {
             new Hunting(),
             new Clearing(),
             new Talking(),
-            new Looking());
+            new Looking(),
+            new Respawning(),
+            new Returning(),
+            new Sleeping());
 
     /** The brain's tools: every ability's, gathered once. The model is sent them in this order. */
     private static final Tools TOOLS = new Tools();
     /**
      * The settings every ability declared. The server's defaults are read from
-     * {@code tachyon.properties}, and read again after {@code /tachyon brain reload}.
+     * {@code tachyon.properties}, and read again after {@code /tachyon brain reload}; those
+     * set in game, from the world as the server starts (see Bots.onStarting).
      */
     private static final Settings SETTINGS = new Settings(key -> Brain.config().serverDefault(key));
 
@@ -52,6 +56,9 @@ final class Abilities {
             a.tools(TOOLS);
             a.settings(SETTINGS);
         }
+        // Every setting with its words for the menu (a label, a group, a level): one without
+        // them stops the start here, where it is seen.
+        SETTINGS.check();
     }
 
     private Abilities() {

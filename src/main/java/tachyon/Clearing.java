@@ -52,6 +52,6 @@ final class Clearing implements Ability {
                     String refused = Bots.orderClear(call.bot(), c1, c2, call.order());
                     return refused != null ? refused : "started clearing " + Brain.pos(c1) + " to " + Brain.pos(c2)
                             + "; nothing broken yet, it takes a while";
-                }));
+                }).core());
     }
 }
