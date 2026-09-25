@@ -89,11 +89,6 @@ final class Scaffolding implements Ability {
         return false;
     }
 
-    /** Whether a trip's search may plan building: its setting, and blocks to build with. */
-    static boolean mayBuild(Bots.Bot p) {
-        return Settings.bool(p, BUILD) && carries(p.body);
-    }
-
     /** Whether a follower's search may plan building. */
     static boolean mayBuildFollowing(Bots.Bot p) {
         return Settings.bool(p, WHILE_FOLLOWING) && carries(p.body);
@@ -150,8 +145,10 @@ final class Scaffolding implements Ability {
         // A bridge: the next point beside it, at its level, over nothing. Over water it swims
         // instead: water has no collision box, and a route that swims across a lake (which
         // the path finder picks over bridging it) became a bridge of 34 cobblestone on
-        // Masurium's client. Over lava it does bridge: that is how lava is crossed.
-        if (goal.y() != py) return false;
+        // Masurium's client. Over lava it does bridge: that is how lava is crossed. From the
+        // ground only: in a jump, or on another's shoulders in a crowd, the tile under the
+        // feet is not the one it stands on.
+        if (goal.y() != py || !b.onGround()) return false;
         BlockPos under = new BlockPos(goal.x(), goal.y() - 1, goal.z());
         BlockPos at = new BlockPos(goal.x(), goal.y(), goal.z());
         if (level.getFluidState(at).is(FluidTags.WATER) || level.getFluidState(under).is(FluidTags.WATER)) return false;

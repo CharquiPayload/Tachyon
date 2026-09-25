@@ -592,6 +592,29 @@ taken, a pickup) is in the whole tick, not in the bots' share. A busy modpack le
 less room than a plain server: measure yours with `/tachyon stats` and
 `/tick query`.
 
+Getting there, as it is now, against 0.3.0 (the same 6-core VM, 100 bots told at
+once, the bots' share from `/tachyon stats` in samples of 10 s, 20 s standing;
+another test server ran on the VM meanwhile, so a sample alone may be 0.6 ms off
+either way):
+
+| 100 bots | 0.3.0 | now |
+|---|---|---|
+| standing (12 samples each, the builds taking turns) | 3.0–4.2 ms, 3.7 on average | 2.5–4.5 ms, 3.9 on average |
+| to a place 325 blocks off, over flat stone | all there in 60–70 s; 4.8 ms, 100 searches, 179,000 tiles | all there in 70 s; 4.6 ms, the same searches |
+| to a place 390 blocks off, over forest, hills and a lake | 69 there in 161 s, 29 out of time on their one route, 2 stuck; 4.0 ms, 185 searches, 2.6 million tiles | all there in 161 s; 4.2 ms, 203 searches, 2.7 million tiles |
+| following a bot that goes 320 blocks | 5.4 ms | 4.9 ms |
+| over a canyon 4 wide, 16 cobblestone each | (none could) | all there in 20 s: 11 bridged it, the rest walked over their bridges; 4.4 ms |
+| through a stone wall 3 thick, a pickaxe each, `break_to_advance` on | (none could) | all there in 20 s, 42 blocks dug by 29 of them; 5.2 ms |
+| out of a fenced pen through one closed gate | (a gate was a wall) | all out in 20 s; 4.6 ms |
+
+The bots' share is the same while they walk, build or dig: a block to place or
+dig is looked at only by a bot whose route asked for one. The searches cost the
+same too; the legs after the first may look at 40,000 tiles instead of 20,000,
+and a trip searches a leg again after 90 s or when stuck, where 0.3.0 gave up.
+One bot alone: 390 blocks over forest, hills and a lake with nothing loaded
+ahead, 110 s and 3 legs; 340 blocks of open sea, 110 s, 7 of its 8 legs swum
+straight on without a search.
+
 ## Where to use it
 
 On your own servers, or on servers whose owners explicitly allowed your bots.
