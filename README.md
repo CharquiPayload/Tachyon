@@ -87,8 +87,9 @@ bot with no brain set up says it plainly. Each kind of notice is said once every
 
 **A player who keeps hitting it** (3 hits in a row, each within 20 s of the one
 before) is told to its owner: `Steve hit it 3 times in 6 s (7 health lost); it
-has not hit back`. It never hits back. Hits from a player it hit first are left
-out: that fight is its own.
+has not hit back`. It never hits back. Hits from a player it hit first, in the
+20 s before (with `hunt_players`, its brain may attack a player named to it), are
+left out: that fight is its own.
 
 ## Death, restarts and the night
 
@@ -360,9 +361,12 @@ VMs). A tick has 50 ms (20 a second) before the server lags:
 About 0.02–0.06 ms of the tick and about 2 MB of memory per bot. Route searches
 and the model's answers run on threads of their own, never on the tick. What a
 bot does by itself (armor looked at every 10 s, trash on a pickup, a bite or a few
-hits under way) costs next to nothing while there is nothing to do: with 100 idle
-bots, about 0.2 µs a bot a tick, and no difference `/tachyon stats` can tell (windows
-with them and without them in turn, on one server: 5.12 and 5.18 ms a tick). A busy
+hits under way, a trip back for its things after a death, hits from players counted)
+costs next to nothing while there is nothing to do: with 100 idle bots, about
+0.25 µs a bot a tick for all of it, timed one by one. `/tachyon stats` can barely
+tell it: 5.24 ms a tick for the 100 without it and 5.36 with it (medians of 18
+samples of 20 s, the two builds taking turns; single samples ranged from 4.7 to
+5.7 ms). A busy
 modpack leaves less room than a plain server: measure yours with
 `/tachyon stats` and `/tick query`.
 
