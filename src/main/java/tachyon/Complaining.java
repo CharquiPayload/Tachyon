@@ -18,15 +18,16 @@ import java.util.UUID;
  * what to say to whoever does this is its brain's, when its notices go through it. Hits
  * from a player the bot hit first lately (the last one it hit, within 20 s) are left out:
  * that fight is its own, and so is one it fights back with {@code defend_from_players}, once
- * it has landed a hit.
- * An arrow counts as its shooter's hit. It costs nothing between hits: it runs only when
- * the bot is hurt.
+ * it has landed a hit. A sword's sweep that caught it while the swing was at someone else
+ * is no hit on it ({@link Defending#swept}): two bots side by side against zombies catch
+ * each other's sweeps, and neither is hitting the other. An arrow counts as its shooter's
+ * hit. It costs nothing between hits: it runs only when the bot is hurt.
  */
 final class Complaining implements Ability {
 
     @Override
     public void hurt(Bots.Bot p, DamageSource source, float amount) {
-        if (!(source.getEntity() instanceof ServerPlayer hitter) || hitter == p.body) return;
+        if (!(source.getEntity() instanceof ServerPlayer hitter) || hitter == p.body || Defending.swept(hitter, p.body)) return;
         BotPlayer b = p.body;
         // The one it hit last, lately: it started that one (a fight a setting lets it have).
         if (b.getLastHurtMob() == hitter && b.tickCount - b.getLastHurtMobTimestamp() < Hits.WINDOW_TICKS) return;

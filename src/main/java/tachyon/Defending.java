@@ -11,19 +11,23 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.OwnableEntity;
 import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.Enemy;
-import net.minecraft.world.entity.monster.RangedAttackMob;
+import net.minecraft.world.entity.monster.Phantom;
 import net.minecraft.world.entity.monster.Witch;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
+import net.neoforged.neoforge.event.entity.player.SweepAttackEvent;
 import org.slf4j.Logger;
 
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Fighting back, without its brain: a fight is measured in ticks, and a call to a model in
@@ -36,29 +40,36 @@ import java.util.Set;
  * its best weapon ({@link Gear#weapon}: brought to hand first, which costs the tick a new
  * item's charge starts again in), each hit once the attack is {@link #CHARGED 90%} charged.
  * It never hits first (a fall or a fire starts nothing: only a hit from something), never a
- * creeper (next to a bomb is where one dies; {@link Creepers} deals with them), and never a
- * mob of its owner's (a pet), and stays quiet while it runs from a creeper. It does not take
- * the body: whatever it was doing, walking and all, goes on while it hits. It waits for a
- * bite to be over.
+ * creeper (next to a bomb is where one dies; {@link Creepers} deals with them), never a mob
+ * of its owner's (a pet), and never an enemy that is neutral until provoked and is not after
+ * it ({@link Threats#hostile}: a calm enderman or zombified piglin next to the zombie that
+ * bit it), and stays quiet while it runs from a creeper. What hurts it and is not a hostile
+ * mob (an iron golem, a wolf, a goat) it does not fight, as Masurium's guard did not: backing
+ * off hurt ({@link Retreating}) is its answer to those. It does not take the body: whatever
+ * it was doing, walking and all, goes on while it hits. It waits for a bite to be over.
  *
  * <p><b>The answer</b>, its body ({@link #URGENCY}): what hurt it out of its reach, within
  * {@link #FAR 25} blocks, and a mob with a bow or crossbow that it sees taking aim at it
- * (its target, which the server knows exactly), before the first arrow: standing still
- * fifteen blocks from a skeleton is being killed in turns, as a Masurium bot was. From 10
- * blocks out, with a bow and a clear shot, it shoots back; not at a witch (she drinks
- * potions and outheals arrows) nor at a breeze or an enderman. A flying one it does not
- * chase along the ground: it stands and watches it, and hits it when it dives. Else it
- * goes for it (a route to within 2 of it, searched again as it moves), and the guard hits
- * once in reach. It lets go of one that has not hurt it for {@link #PATIENCE 15 s}, that
- * got farther than 25, or that it finds no way to. A hunt or a kill ordered against that
- * very kind of mob is left to fight it as it does.
+ * ({@link Threats#takingAim}: the pose and the head a player sees), before the first arrow:
+ * standing still fifteen blocks from a skeleton is being killed in turns, as a Masurium bot
+ * was. From 10 blocks out, with a bow, it shoots back; not at a witch (she drinks potions
+ * and outheals arrows) nor at a breeze or an enderman. A phantom it does not chase along the
+ * ground: for a few seconds after its hit, it stands and watches for its dive; any other
+ * flyer (a blaze, a ghast) never comes down, and its order goes on, the guard's hands ready.
+ * Else it goes for it (a route to within 2 of it, searched again as it moves), and the guard
+ * hits once in reach. It lets go of one that has not hurt it for {@link #PATIENCE 15 s} or
+ * got farther than 25; one it finds no way to it does not go for again for
+ * {@link #NO_WAY_TICKS 30 s} (a skeleton on a pillar would otherwise take it from its order
+ * every second and a half, all night). A hunt or a kill ordered against that very kind of
+ * mob is left to fight it as it does.
  *
  * <p><b>Players</b> are fought only with its {@code defend_from_players} on (off by
  * default, the operators' to change: whom a bot may fight is the server's business): then
  * a player who hurts it, or who hurts its owner within 16 blocks of it where it sees them,
  * is answered as a mob that hurt it is. Never its owner, a bot of its owner's, or a player
- * in creative or spectator. Without it, a player's hits bring its owner a notice
- * ({@link Complaining}), and nothing more.
+ * in creative or spectator; and never for a sword's sweep ({@link #swept}), whose swing was
+ * at someone else: two bots side by side against zombies catch each other's sweeps. Without
+ * it, a player's hits bring its owner a notice ({@link Complaining}), and nothing more.
  *
  * <p>With nothing going on it costs a look at an empty map, and {@link Threats}' look every
  * 10 ticks for someone taking aim.
@@ -95,6 +106,10 @@ final class Defending implements Ability {
     static final int BLOCKED_TICKS = 40;
     /** An arrow is watched this long at most. */
     static final int FLIGHT_MAX = 30;
+    /** One it found no way to is not gone for again for this long: 30 s, as a creeper with no way to it. */
+    static final int NO_WAY_TICKS = 20 * 30;
+    /** A phantom is watched for, standing, this long after its last hit at most. */
+    static final int WATCH_TICKS = 20 * 5;
 
     /** How it answers an attacker out of its reach. */
     private enum Answer { NONE, BOW, WATCH, CHARGE }
@@ -131,6 +146,33 @@ final class Defending implements Ability {
     /** The bots in a fight. Empty nearly always: then its reflex looks at nothing but the map. */
     private static final Map<Bots.Bot, Fight> FIGHTS = new IdentityHashMap<>();
 
+    /**
+     * The attackers a bot found no way to, by id, and until when it does not go for them
+     * again (its slot, while it is in the game). Plain data.
+     */
+    static final class NoWay {
+        private final Map<UUID, Long> until = new HashMap<>();
+
+        /** Whether it does not go for {@code id} at tick {@code now}. */
+        boolean has(UUID id, long now) {
+            Long t = until.get(id);
+            return t != null && t > now;
+        }
+
+        /** It found no way to {@code id} at tick {@code now}: not for 30 s. What is over is forgotten. */
+        void add(UUID id, long now) {
+            until.values().removeIf(t -> t <= now);
+            until.put(id, now + NO_WAY_TICKS);
+        }
+    }
+
+    /**
+     * The sword sweeps of this tick: for each player that swung, at whom (its id) and when.
+     * The game hurts what the sweep catches with the same player's attack as the one it swung
+     * at, and says whom it swung at only after both: this is how a hit is told from a sweep.
+     */
+    private static final Map<UUID, long[]> SWEEPS = new HashMap<>();
+
     @Override
     public void settings(Settings settings) {
         settings.bool(PLAYERS, false, "whether it also fights players who attack it or its owner, as it fights mobs"
@@ -154,18 +196,39 @@ final class Defending implements Ability {
     public void hurt(Bots.Bot p, DamageSource source, float amount) {
         Entity by = source.getEntity();
         if (by == null || by == p.body) return;
+        if (by instanceof Player pl && swept(pl, p.body)) return;       // caught in a swing at someone else
         long now = p.body.getServer().getTickCount();
         Fight f = fight(p, now);
         f.alertUntil = now + ALERT;
         if (by instanceof LivingEntity e && foe(p, e)) attack(p, f, e, now, "hit it");
     }
 
-    /** Its owner hurt by a player: the bots of theirs that see it, with the setting on, answer that player. */
+    /**
+     * Whether {@code hurt} was caught by {@code hitter}'s sword sweep this tick, the swing
+     * being at someone else: not a hit meant for it.
+     */
+    static boolean swept(Player hitter, LivingEntity hurt) {
+        if (SWEEPS.isEmpty()) return false;
+        long[] s = SWEEPS.get(hitter.getUUID());
+        return s != null && s[1] == hitter.getServer().getTickCount() && s[0] != hurt.getId();
+    }
+
+    /**
+     * Its owner hurt by a player: the bots of theirs that see it, with the setting on, answer
+     * that player. And every sword sweep noted, at whom it was ({@link #swept}), last of the
+     * handlers, when whether it sweeps at all is settled.
+     */
     @Override
     public void events(IEventBus bus) {
+        bus.addListener(EventPriority.LOWEST, true, SweepAttackEvent.class, e -> {
+            if (!e.isSweeping() || e.getEntity().level().isClientSide()) return;
+            long now = e.getEntity().getServer().getTickCount();
+            SWEEPS.values().removeIf(s -> s[1] != now);
+            SWEEPS.put(e.getEntity().getUUID(), new long[]{e.getTarget().getId(), now});
+        });
         bus.addListener(LivingDamageEvent.Post.class, e -> {
             if (!(e.getEntity() instanceof ServerPlayer owner) || !(e.getSource().getEntity() instanceof Player hitter)
-                    || hitter == owner) return;
+                    || hitter == owner || swept(hitter, owner)) return;
             for (Bots.Bot q : Bots.all()) {
                 if (!owner.getUUID().equals(q.owner) || q.body == hitter || q.body == owner) continue;
                 BotPlayer b = q.body;
@@ -201,9 +264,12 @@ final class Defending implements Ability {
     }
 
     /**
-     * Whether it fights {@code e} when it hurts it: a mob (not a creeper, nor its owner's pet),
-     * or a player with its {@code defend_from_players} on (never its owner, a bot of its
-     * owner's, or a player in creative or spectator).
+     * Whether it fights {@code e} when it hurts it: a hostile mob (an {@link Enemy}, not a
+     * creeper, nor its owner's pet), or a player with its {@code defend_from_players} on
+     * (never its owner, a bot of its owner's, or a player in creative or spectator). Not a
+     * mob that is no enemy (an iron golem, a wolf, a bee), as Masurium's guard fought only
+     * enemies: a village's golem angry at it would be fought to the death, and it is the
+     * stronger; a bot badly hurt by one backs off instead ({@link Retreating}).
      */
     static boolean foe(Bots.Bot p, LivingEntity e) {
         if (e == p.body || !e.isAlive() || e instanceof Creeper) return false;
@@ -212,7 +278,7 @@ final class Defending implements Ability {
             Bots.Bot other = Bots.of(pl);
             return other == null || p.owner == null || !p.owner.equals(other.owner);
         }
-        return !(e instanceof OwnableEntity o && p.owner != null && p.owner.equals(o.getOwnerUUID()));
+        return e instanceof Enemy && !(e instanceof OwnableEntity o && p.owner != null && p.owner.equals(o.getOwnerUUID()));
     }
 
     // --- the answer: the body ---------------------------------------------------------------------
@@ -227,8 +293,8 @@ final class Defending implements Ability {
             if (archer == null) return;
             f = fight(p, now);
             attack(p, f, archer, now, "takes aim at it");
-        } else if (Threats.due(p, now) && f.attacker instanceof Mob m && m.getTarget() == p.body && p.body.hasLineOfSight(m)) {
-            f.lastHit = now;             // still aiming at it: it has not let it be
+        } else if (Threats.due(p, now) && f.attacker instanceof Mob m && Threats.threatens(m, p.body) && p.body.hasLineOfSight(m)) {
+            f.lastHit = now;             // still at it, as it looks: it has not let it be
         } else if (f.attacker == null && Threats.due(p, now)) {
             Mob archer = aiming(p, now);
             if (archer != null) attack(p, f, archer, now, "takes aim at it");
@@ -285,10 +351,24 @@ final class Defending implements Ability {
             how = Answer.BOW;
             doing = "shooting back at " + Threats.a(a) + " " + Threats.blocks(d) + " away";
         } else if (!a.onGround() && a.getY() > b.getY() + 1.5 && !a.isInWater()) {
-            // A flyer is not chased along the ground: a route "to it" is one step, done, over and over.
+            // A flyer is not chased along the ground: a route "to it" is one step, done, over
+            // and over. A phantom dives: it stands and watches for that, a few seconds after
+            // each hit. A blaze or a ghast never comes down, and standing under one is its
+            // order kept waiting for nothing: the guard's hands are ready if it comes in reach.
+            if (!(a instanceof Phantom) || now - f.lastHit > WATCH_TICKS) {
+                if (held) letGo(p, f);
+                f.answer = Answer.NONE;
+                return;
+            }
             how = Answer.WATCH;
             doing = "watching " + Threats.a(a) + " overhead";
         } else {
+            if (p.slot(NoWay.class, NoWay::new).has(a.getUUID(), now)) {
+                // No way to it lately: its order goes on, and the guard hits it if it comes.
+                if (held) letGo(p, f);
+                f.answer = Answer.NONE;
+                return;
+            }
             how = Answer.CHARGE;
             doing = "going for " + Threats.a(a) + " " + Threats.blocks(d) + " away";
         }
@@ -306,9 +386,11 @@ final class Defending implements Ability {
             f.noWay = p.path == null ? f.noWay + 1 : 0;
             if (f.noWay >= NO_WAY_MAX) {
                 // Neither a shot nor a way: nothing to do from here, and holding the body would
-                // keep its order waiting for nothing. (What the search said is its doing now.)
-                LOG.info("[tachyon] {} lets {} be: it finds no way to it ({})", p.name(), Threats.a(a), p.doing);
-                f.attacker = null;
+                // keep its order waiting for nothing; asking again at once would take the body
+                // back every few ticks. (What the search said is its doing now.)
+                p.slot(NoWay.class, NoWay::new).add(a.getUUID(), now);
+                LOG.info("[tachyon] {} does not go for {} for {} s: it finds no way to it ({})", p.name(), Threats.a(a),
+                        NO_WAY_TICKS / 20, p.doing);
                 letGo(p, f);
                 return;
             }
@@ -325,12 +407,16 @@ final class Defending implements Ability {
         }
     }
 
-    /** Whether it shoots back at it from here: a bow and arrows, 10 blocks or more, in sight, clear, and worth an arrow. */
+    /**
+     * Whether it shoots back at it from here: a bow and arrows, 10 blocks or more, in sight,
+     * and worth an arrow. Whether the shot is clear (no block in the arc, nobody in the line)
+     * is looked at as the arrow is let go ({@link Bow#step}); a blocked one sends it at the
+     * attacker for 2 s instead.
+     */
     private static boolean bow(Bots.Bot p, Fight f, LivingEntity a, double d, long now) {
         BotPlayer b = p.body;
         return d >= BOW_MIN && now >= f.noBowUntil && !(a instanceof Witch) && !Bow.immune(a) && !b.isInWater()
-                && Bow.Misses.worthIt(a.getUUID()) && Bow.missing(b) == null && b.hasLineOfSight(a)
-                && !Bow.someoneInTheLine(b, a);
+                && Bow.Misses.worthIt(a.getUUID()) && Bow.missing(b) == null && b.hasLineOfSight(a);
     }
 
     /**
@@ -338,7 +424,8 @@ final class Defending implements Ability {
      * counts it), and the answer does not take it away from it.
      */
     private static boolean leftToTheJob(Bots.Bot p, LivingEntity a) {
-        return p.job instanceof Hunt h && h.prey().matches(p, a) || p.job instanceof Shoot s && s.prey().matches(p, a);
+        Job j = Bots.job(p);
+        return j instanceof Hunt h && h.prey().matches(p, a) || j instanceof Shoot s && s.prey().matches(p, a);
     }
 
     /** Its body given back, if it held it, and a draw let down. */
@@ -417,8 +504,9 @@ final class Defending implements Ability {
     }
 
     /**
-     * What the guard hits: its attacker, in reach; else, while alert, the nearest hostile mob
-     * (not a creeper) within its reach and sight.
+     * What the guard hits: its attacker, in reach; else, while alert, the nearest mob hostile
+     * to it ({@link Threats#hostile}: not a calm enderman or zombified piglin), not a creeper,
+     * within its reach and sight.
      */
     private static LivingEntity target(Bots.Bot p, Fight f, long now) {
         LivingEntity a = f.attacker;
@@ -428,7 +516,7 @@ final class Defending implements Ability {
         LivingEntity best = null;
         double bestD = LOOK * LOOK;
         for (Mob m : b.level().getEntitiesOfClass(Mob.class, b.getBoundingBox().inflate(LOOK),
-                e -> e instanceof Enemy && !(e instanceof Creeper) && e.isAlive())) {
+                e -> !(e instanceof Creeper) && Threats.hostile(e, b))) {
             double d = m.distanceToSqr(b);
             if (d < bestD && reach(p, m) && foe(p, m)) {
                 bestD = d;
@@ -500,8 +588,9 @@ final class Defending implements Ability {
     }
 
     /**
-     * A mob with a bow or a crossbow (a witch too) taking aim at it: its target is the bot,
-     * and it sees it, within 25. The nearest, or null.
+     * A mob with a bow or a crossbow (a witch too) taking aim at it, as a player sees it
+     * ({@link Threats#takingAim}: drawn, facing it), in its sight, within 25; not one it
+     * found no way to lately, unless it can shoot back. The nearest, or null.
      */
     private static Mob aiming(Bots.Bot p, long now) {
         BotPlayer b = p.body;
@@ -509,10 +598,14 @@ final class Defending implements Ability {
         if (around.isEmpty()) return null;
         Mob best = null;
         double bestD = FAR * FAR;
+        NoWay noWay = null;
         for (Mob m : around) {
-            if (!(m instanceof RangedAttackMob) || m instanceof Creeper || m.getTarget() != b) continue;
+            if (!Threats.takingAim(m, b)) continue;
             double d = m.distanceToSqr(b);
-            if (d < bestD && b.hasLineOfSight(m)) {
+            if (d >= bestD) continue;
+            if (noWay == null) noWay = p.slot(NoWay.class, NoWay::new);
+            if (noWay.has(m.getUUID(), now) && Bow.missing(b) != null) continue;
+            if (b.hasLineOfSight(m)) {
                 bestD = d;
                 best = m;
             }

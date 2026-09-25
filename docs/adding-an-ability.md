@@ -200,9 +200,24 @@ anywhere in the inventory; not while a reflex holds the hands. `Gear.weapon` is
 the score for hitting (a weapon before any tool, then damage per second), and
 `Gear.toHand(p, slot)` brings one slot's item into the hand: selected in the
 hotbar, or brought up from the backpack into the hotbar slot Masurium's rule
-gives up (the weakest weapon for a better one, else an empty slot, else the one
-in hand). `Gear` has the rest of what a bot carries: an item's id in words and
-back (`Gear.id`, `Gear.item`), counts, whether something fits.
+gives up (for a weapon, the weakest weapon there if the new one is better; else
+an empty slot; else, for a weapon, the smallest stack of something of little
+use, not a tool, weapon, bow, food or torch; else the one in hand). A hit waits
+a tick after the hand changed, as a player's: the game gives the new item its
+damage and starts its charge again in the body's own tick, after the hands; hit
+at once, the old item's damage lands. `Job.swapped(p, score)` is `hold` saying
+whether the hand changed, to return on. `Gear` has the rest of what a bot
+carries: an item's id in words and back (`Gear.id`, `Gear.item`), counts,
+whether something fits.
+
+**What it goes after, it sees.** A job that picks a target (a mob to hunt, a
+player to throw to) takes only what a player in the bot's place would know of:
+in sight from its eyes, or within 4 blocks (`Hunt.noticed(b, e)`,
+`Hunt.nearestSeen(b, found, avoid)` for the nearest of a lookup, the sight tried
+on a few only). A lookup of the level's entities goes through walls. And a job
+that looks around every so many ticks does it on a tick of its own for each bot
+(`Hunt.due(p, now, every)`): a hundred bots told at once must not all look in the
+same tick.
 
 `Bots.plan(p, to, goal, options, doing)` searches with options of its own
 (`Route.Options`: a longer fall, building, breaking); the other `plan`s use
@@ -275,8 +290,9 @@ More a tool may have, set as it is made:
 The tools are sent to the model in `Abilities`' order. A tool changes what the
 model is sent, and so how every bot behaves: its name and description are
 behaviour, as much as its handler. `ToolsTest` holds the eight core tools to
-the byte (`core-tools.json`: those of 0.1.0, with hunt's `mob` mended and hunt
-made Masurium's since); new tools come among them without touching them.
+the byte (`core-tools.json`: those of 0.1.0, with hunt's `mob` mended, hunt
+made Masurium's since, and its `count` saying when it stops); new tools come
+among them without touching them.
 
 ## The brain
 
@@ -285,8 +301,8 @@ Besides its tools, an ability can reach a bot's brain (`Bots.brain(p)`):
 - **`Notices.say(p, kind, text)`**: something its owner is to hear of that
   nobody asked about (how going back for its things went, a player hitting
   it). Its `notices` setting decides how: its brain says it in its own words
-  (one call to its model, no tools, as it tells how an order went), a plain
-  line to its owner, or nothing. It takes care of the brakes: each `kind` once
+  (one call to its model, no tools, as it tells how an order went), whispered
+  to its owner alone, a plain line to its owner, or nothing. It takes care of the brakes: each `kind` once
   every 10 minutes per bot (put the detail in the kind when two cases must both
   be told: `hit:Steve`, `hit:Alex`), and only while its owner is in the game.
   `text` says what happened, about the bot without naming it and with the
@@ -301,6 +317,8 @@ Besides its tools, an ability can reach a bot's brain (`Bots.brain(p)`):
   starts is told to its owner when it is over. **Every notice is a paid call
   to a model**: send one when it matters, and not again for the same thing for
   a while (keep when in the bot's slot, see below). A few wait while it thinks.
+  Its owner chose how much it hears unasked (`notices`): with `off` send none,
+  and with `plain` say it with `Notices.say` instead (`Tossing` does both).
 - **`rules(bot, rules)`**: lines added to its instructions on every turn
   (standing orders, a personality). Short, in plain words for the model.
 - **`state(bot, parts)`**: a few words each, added to the state line at the
@@ -438,16 +456,23 @@ it (`body.stopUsingItem()`) on every way out. What there is to build on:
   hungry decides when; this decides what, and does it as a player would.
 - **The bow**: `Bow.step(p, target)` one tick of a draw at a target (into the
   hand, aimed where the arrow will meet it, drawn, let go when full and the shot
-  is clear); `Bow.stop(p)` lets a draw down; `Bow.Misses` is the shared memory of
-  targets not worth another arrow.
+  is clear: no block in the arc, nobody in the line; that is looked at there, as
+  the arrow goes, not on every tick of the decision); `Bow.stop(p)` lets a draw
+  down; `Bow.Misses` is the shared memory of targets not worth another arrow.
 - **Trash**: `Tossing.tossTrash(p)` tosses its trash but one stack of each block
   it builds with.
-- **What is hostile around**: `Threats.around(p, now)`, the hostile mobs within
-  25 blocks, walls and all, looked up once a tick for a bot however many reflexes
-  ask. Look when `Threats.due(p, now)` says (every 10 ticks, each bot on a tick of
-  its own), and at what you already know in between. `Threats.noticed(b, e, 4)`
-  is what a player in its place makes out: what it sees, and what is right next
-  to it.
+- **What is hostile around**: `Threats.around(p, now)`, the mobs hostile to it
+  within 25 blocks, walls and all, looked up once a tick for a bot however many
+  reflexes ask. Hostile is `Threats.hostile(e, to)`: an enemy, but one that is
+  neutral until provoked (an enderman, a zombified piglin, a piglin, a spider in
+  the light) only once it is after the bot; hitting a calm zombified piglin
+  angers its whole group. Look when `Threats.due(p, now)` says (every 10 ticks,
+  each bot on a tick of its own), and at what you already know in between.
+  `Threats.noticed(b, e, 4)` is what a player in its place makes out: what it
+  sees, and what is right next to it; decide on nothing it does not make out.
+  `Threats.takingAim(m, b)` and `Threats.threatens(m, b)` read a mob as a player
+  does: its pose (a bow drawn, arms up, a crossbow loaded) and its head turned
+  to the bot, not the target its AI keeps.
 - **Getting away**: `Retreating.away(p, from, far, doing)` searches a route to
   anywhere `far` blocks from something (a goal of the path finder's,
   `Route.Meta.awayFrom`), walked by the legs; in a closed place with nowhere that
@@ -455,10 +480,15 @@ it (`body.stopUsingItem()`) on every way out. What there is to build on:
 - **A search of its own**, apart from the walk (whether a creeper can walk to the
   bot): `Bots.search(level, a, b, world -> ...)` runs on a routes thread over the
   chunks around `a` and `b`, and its answer is a future, looked at on a later
-  tick, never waited for.
+  tick, never waited for. The routes threads are the walks' too: ask only for
+  what the reflex would act on, share an answer between bots standing together,
+  and ask nothing while `Bots.routesBusy()` (more searches wait than the threads
+  get through in a moment; `/tachyon stats` says how many wait).
 - **What the others are at**: `Defending.fighting(p)` (hit lately, or answering
-  an attacker), `Creepers.fleeing(p)`, `Eating.eating(p)`, `Bots.holding(p)`.
-  A reflex that eats, shoots or trades hits by itself asks them first.
+  an attacker), `Creepers.fleeing(p)`, `Eating.eating(p)`, `Bots.holding(p)`,
+  and `Bots.job(p)`, its job, at it or set aside while a reflex holds the body (a
+  kill ordered against the creeper a reflex would shoot: the kill shoots it). A
+  reflex that eats, shoots or trades hits by itself asks them first.
 
 **Nothing that sends a bot away, or brings one in, runs inside a tick**: not
 from a reflex, not from a hook. `server.execute(...)` does NOT wait there: on
@@ -552,4 +582,5 @@ an `@Accessor` interface (`PlayerListAccess`).
   it to the settings the mod declares, row for row: a new setting fails it until
   its row is there.
 - `/tachyon stats` with many bots, if it adds a reflex or a heavy job: what it
-  costs the tick.
+  costs the tick, with nothing to do and with something to do (mobs about at
+  night, for a reflex), and how many searches wait for a routes thread.

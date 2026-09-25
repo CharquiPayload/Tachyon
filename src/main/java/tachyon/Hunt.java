@@ -5,18 +5,17 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.ai.attributes.AttributeModifier;
-import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import tachyon.path.Route;
 
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
@@ -29,16 +28,23 @@ import java.util.UUID;
  * <p>The hand is a player's own: {@link Player#attack} with its cooldown, damage, knockback
  * and sweep, from within a player's reach and with the target in sight, and the weapon
  * weighed again before every hit ({@link Gear#weapon}: building and digging leave
- * cobblestone in the hand, and a Masurium bot kept hitting with it). What it goes after is
- * a {@link Prey}: kinds of mob (the nearest of any), never a tamed or named one, and a
- * player only by name, for a kill, with {@code hunt_players}. Several hunters of one kind
- * spread over the herd: a target another bot chases is taken only when there is no other.
+ * cobblestone in the hand, and a Masurium bot kept hitting with it). A weapon brought to
+ * hand costs the tick the game starts its charge again in, as a player's does: a hit in
+ * that same tick would land with the old item's damage. What it goes after is a
+ * {@link Prey}: kinds of mob (the nearest of any), never a tamed or named one, and a player
+ * only by name, for a kill, with {@code hunt_players}. Several hunters of one kind spread
+ * over the herd: a target another bot chases is taken only when there is no other.
  *
- * <p>It sees 128 blocks around (what a player's game shows of the mobs), the nearest 48
- * first. With none in sight it does not stand still: it goes out looking for them, in legs
- * of 48 blocks the way it was told or faces, turning right when three legs in a row get it
- * nowhere, for 300 blocks or 3 minutes at most, and twice per errand at most. With no count
- * it hunts every one it finds, and is done after half a minute without seeing more.
+ * <p>It takes what it sees ({@link #noticed}: in sight from its eyes, or within 4, heard),
+ * out to 128 blocks, the nearest 48 first: never a cow behind a hill or a player behind a
+ * wall, which no player in its place would know of. It looks every half second, each hunter
+ * on a tick of its own, and out past 48 every 2 s: a hundred hunters told at once do not
+ * all look in the same tick. With none in sight it does not stand still: it goes out
+ * looking for them, in legs of 48 blocks the way it was told or faces, turning right when
+ * three legs in a row get it nowhere, for 300 blocks or 3 minutes at most, and twice per
+ * errand at most. A search that finds none ends the hunt, said with how far it looked:
+ * there is nothing left to try. With no count it hunts every one it finds; once its two
+ * searches are spent, it is done after half a minute without seeing more.
  *
  * <p>After a kill it picks up what lies within 12 blocks: not its trash (it would toss it
  * again), not what does not fit, and not an item it stood by for 2 s without it going in.
@@ -50,8 +56,12 @@ final class Hunt extends Job {
 
     /** Prey is looked for this far around, the nearest {@link #NEAR} first. */
     static final double VIEW = 128, NEAR = 48;
-    /** Without a target, one is looked for this often. */
-    private static final int LOOK_EVERY = 10;
+    /** Without a target, one is looked for this often; out to {@link #VIEW}, this often. */
+    private static final int LOOK_EVERY = 10, FAR_EVERY = 40;
+    /** Seen or not, prey this close is noticed (heard, round the corner). */
+    static final double HEARD = 4;
+    /** A look tries the sight to this many at most, the nearest first: the rest wait for the next look. */
+    static final int SIGHTS_MAX = 16;
     /** This close, with no route left to walk, it walks straight at it. */
     private static final double CLOSE_IN = 4.0;
     /** A route to the target ends within this of its feet. */
@@ -90,7 +100,6 @@ final class Hunt extends Job {
     private int killed;
 
     private LivingEntity target;
-    private long lookedAt = -LOOK_EVERY;
     /** Where the target was at the last search for it (NaN: none yet). */
     private double targetX = Double.NaN, targetZ;
     private boolean awaiting;
@@ -185,10 +194,11 @@ final class Hunt extends Job {
             return false;
         }
         if (target == null) {
-            if (now - lookedAt < LOOK_EVERY) return true;
-            lookedAt = now;
-            target = choose(p);
-            if (target == null) return lookFurther(p, now);
+            if (!due(p, now, LOOK_EVERY)) return true;
+            boolean far = due(p, now, FAR_EVERY);
+            target = choose(p, now, far);
+            // None near: the look out to 128 decides whether to go looking, and it comes every 2 s.
+            if (target == null) return searching || far ? lookFurther(p, now) : true;
             if (searching) {
                 searching = false;
                 Bots.halt(p, status());
@@ -325,9 +335,11 @@ final class Hunt extends Job {
         if (target == null) return;
         if (inReach(p)) {
             Bots.release(b);
-            // The weapon weighed again before every hit: what the hand holds changes.
-            hold(p, Gear::weapon);
             b.lookAt(EntityAnchorArgument.Anchor.EYES, target.getBoundingBox().getCenter());
+            // The weapon weighed again before every hit: what the hand holds changes. One
+            // brought to hand hits from the next tick on, when the game has its damage and
+            // has started its charge again, as for a player.
+            if (swapped(p, Gear::weapon)) return;
             if (b.getAttackStrengthScale(0.5f) >= 1.0f) {
                 b.attack(target);
                 b.swing(InteractionHand.MAIN_HAND);
@@ -345,8 +357,18 @@ final class Hunt extends Job {
         }
     }
 
+    /**
+     * It ends, or is set aside (a reflex took the body). A target its last hit killed is
+     * counted here: it is counted on its next think, and a reflex that takes the body in
+     * between would have it dead and never counted.
+     */
     @Override
     void end(Bots.Bot p) {
+        if (target != null && target.isDeadOrDying() && target.getLastHurtByMob() == p.body) {
+            killed++;
+            loot = LOOT_TICKS;
+            letGo.clear();
+        }
         target = null;
         item = null;
     }
@@ -373,36 +395,75 @@ final class Hunt extends Job {
     }
 
     /**
-     * The nearest prey around, preferring one no other bot chases: within {@link #NEAR}
-     * first, and out to {@link #VIEW} only when there is none that near, since the bigger
-     * look costs more.
+     * Whether this is one of its ticks to look, one in {@code every} (a multiple of 10): each
+     * hunter on a tick of its own, and half a look off its reflexes' own ({@link Threats#due}).
+     * The far look's ticks are among the near look's.
      */
-    private LivingEntity choose(Bots.Bot p) {
-        Set<Entity> chased = Collections.newSetFromMap(new IdentityHashMap<>());
-        for (Bots.Bot q : Bots.all()) {
-            if (q != p && q.job instanceof Hunt h && h.target != null) chased.add(h.target);
+    static boolean due(Bots.Bot p, long now, int every) {
+        return Math.floorMod(now + p.name().hashCode() + Threats.EVERY / 2, every) == 0;
+    }
+
+    /** The targets the hunters chase, gathered once a tick for all of them (and added to as they choose). */
+    private static final Set<Entity> CHASED = Collections.newSetFromMap(new IdentityHashMap<>());
+    private static long chasedAt = -1;
+
+    private static Set<Entity> chased(long now) {
+        if (now != chasedAt) {
+            CHASED.clear();
+            for (Bots.Bot q : Bots.all()) {
+                if (q.job instanceof Hunt h && h.target != null) CHASED.add(h.target);
+            }
+            chasedAt = now;
         }
-        LivingEntity near = nearest(p, NEAR, chased);
-        return near != null ? near : nearest(p, VIEW, chased);
+        return CHASED;
+    }
+
+    /**
+     * The nearest prey it sees, preferring one no other bot chases: within {@link #NEAR}
+     * first, and out to {@link #VIEW} only when there is none that near and it is a tick for
+     * the far look ({@code far}), since the bigger look costs more.
+     */
+    private LivingEntity choose(Bots.Bot p, long now, boolean far) {
+        Set<Entity> chased = chased(now);
+        LivingEntity t = nearest(p, NEAR, chased);
+        if (t == null && far) t = nearest(p, VIEW, chased);
+        if (t != null) chased.add(t);
+        return t;
     }
 
     private LivingEntity nearest(Bots.Bot p, double radius, Set<Entity> chased) {
         BotPlayer b = p.body;
-        LivingEntity best = null, free = null;
-        double bestD = radius * radius, freeD = radius * radius;
-        for (LivingEntity e : b.level().getEntitiesOfClass(LivingEntity.class, b.getBoundingBox().inflate(radius),
-                e -> prey.matches(p, e) && !letGo.contains(e.getUUID()))) {
-            double d = e.distanceToSqr(b);
-            if (d < bestD) {
-                bestD = d;
-                best = e;
-            }
-            if (d < freeD && !chased.contains(e)) {
-                freeD = d;
-                free = e;
+        List<LivingEntity> found = b.level().getEntitiesOfClass(LivingEntity.class, b.getBoundingBox().inflate(radius),
+                e -> prey.matches(p, e) && !letGo.contains(e.getUUID()) && e.distanceToSqr(b) <= radius * radius);
+        return nearestSeen(b, found, chased);
+    }
+
+    /**
+     * Of {@code found}, the nearest the bot notices ({@link #noticed}), one not in {@code avoid}
+     * first (a herd is shared out), else any. The sight is tried on {@link #SIGHTS_MAX} of each
+     * at most, the nearest first. Null: none.
+     */
+    static <T extends LivingEntity> T nearestSeen(BotPlayer b, List<T> found, Set<Entity> avoid) {
+        if (found.isEmpty()) return null;
+        found.sort(Comparator.comparingDouble(e -> e.distanceToSqr(b)));
+        for (boolean free : new boolean[]{true, false}) {
+            int tried = 0;
+            for (T e : found) {
+                if (avoid.contains(e) == free) continue;
+                if (tried++ >= SIGHTS_MAX) break;
+                if (noticed(b, e)) return e;
             }
         }
-        return free != null ? free : best;
+        return null;
+    }
+
+    /**
+     * Whether a player in its place knows it is there: it sees it from its eyes, or it is
+     * within {@link #HEARD 4}. A mob behind a hill or a wall it does not know of: a look
+     * through blocks is what the honest-player rule forbids.
+     */
+    static boolean noticed(BotPlayer b, Entity e) {
+        return Threats.noticed(b, e, HEARD);
     }
 
     /**
@@ -452,18 +513,5 @@ final class Hunt extends Job {
             Bots.plan(p, item.blockPosition(), 1.0, chase(b), status());
         }
         return true;
-    }
-
-    /** What a hit with it adds to the hand's: the item's attack damage in the main hand. */
-    static double damage(ItemStack s) {
-        if (s.isEmpty()) return 0;
-        double[] sum = {0};
-        s.forEachModifier(EquipmentSlot.MAINHAND, (attribute, modifier) -> {
-            if (attribute.value() == Attributes.ATTACK_DAMAGE.value()
-                    && modifier.operation() == AttributeModifier.Operation.ADD_VALUE) {
-                sum[0] += modifier.amount();
-            }
-        });
-        return sum[0];
     }
 }

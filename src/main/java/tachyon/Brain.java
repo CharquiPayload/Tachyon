@@ -3,6 +3,7 @@ package tachyon;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.mojang.logging.LogUtils;
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -44,8 +45,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * brain is told, with no tools, and says how it went to whoever gave it. What its body has
  * to tell its owner unasked (its things got back after a death, a player hitting it) is a
  * report ({@link #report}, through {@link Notices}): told the same way, with no tools, in
- * one call. What an ability notices (hunger, a reminder due) is a notice ({@link #notice}):
- * the brain is told, with its tools, and what it starts is told to its owner.
+ * one call, and its words go to its owner alone, as a whisper: they say where it died and
+ * where its things lie, which is nobody else's business. What an ability notices (hunger, a
+ * reminder due) is a notice ({@link #notice}): the brain is told, with its tools, and what
+ * it starts is told to its owner.
  */
 final class Brain {
 
@@ -184,8 +187,9 @@ final class Brain {
     /**
      * What its body has to tell its owner unasked, in words for the model (see
      * {@link Notices#say}, which decides whether it is said, and how): its brain tells them
-     * in its own words, in one call with no tools, as it tells news of an order. It waits
-     * with the notices while it thinks. On the server's thread.
+     * in its own words, in one call with no tools, as it tells news of an order; but to its
+     * owner alone, as a whisper ({@link #whisper}). It waits with the notices while it
+     * thinks. On the server's thread.
      */
     void report(String text) {
         if (config().url(p.name()).isEmpty()) return;
@@ -266,7 +270,10 @@ final class Brain {
                 }
             }
             String said2 = answer;
-            server.execute(() -> say(said2));
+            server.execute(() -> {
+                if (said.kind() == Kind.REPORT) whisper(said.who(), said2);
+                else say(said2);
+            });
             List<JsonObject> turn = new ArrayList<>();
             turn.add(message("user", heard));
             turn.addAll(msgs.subList(from, msgs.size()));
@@ -475,6 +482,27 @@ final class Brain {
             if (line.isEmpty()) continue;
             if (line.length() > LINE_MAX) line = line.substring(0, LINE_MAX - 1) + "…";
             server.getPlayerList().broadcastSystemMessage(Component.literal("<" + p.name() + "> " + line), false);
+            if (++n >= LINES_MAX) break;
+        }
+    }
+
+    /**
+     * Its words to one player only, as the game shows a whisper ({@code /msg}): "Ada whispers
+     * to you: ...", in the reader's language, grey. What its body tells its owner unasked
+     * says where it died and where its things lie; in the open chat anyone could go and take
+     * them. Written to the log too, since the console does not see it. Nobody, if they left.
+     */
+    private void whisper(UUID who, String text) {
+        ServerPlayer to = who == null ? null : server.getPlayerList().getPlayer(who);
+        if (text.isEmpty() || p.leaving() != null || to == null) return;
+        int n = 0;
+        for (String line : text.split("\\R")) {
+            line = line.strip();
+            if (line.isEmpty()) continue;
+            if (line.length() > LINE_MAX) line = line.substring(0, LINE_MAX - 1) + "…";
+            LOG.info("[tachyon] {} whispers to {}: {}", p.name(), to.getGameProfile().getName(), line);
+            to.sendSystemMessage(Component.translatable("commands.message.display.incoming", p.name(), line)
+                    .withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC));
             if (++n >= LINES_MAX) break;
         }
     }

@@ -85,12 +85,20 @@ class BowTest {
     }
 
     @Test
-    @DisplayName("only the last 64 targets are remembered")
+    @DisplayName("the last 1024 targets asked about are remembered: more than a horde aims at; one asked about stays")
     void bounded() {
-        UUID first = UUID.randomUUID();
+        Bow.Misses.forget();
+        UUID first = UUID.randomUUID(), kept = UUID.randomUUID();
         for (int i = 0; i < 3; i++) Bow.Misses.missed(first);
-        for (int i = 0; i < 100; i++) Bow.Misses.missed(UUID.randomUUID());
+        for (int i = 0; i < 3; i++) Bow.Misses.missed(kept);
+        for (int i = 0; i < 600; i++) Bow.Misses.missed(UUID.randomUUID());
+        assertFalse(Bow.Misses.worthIt(first), "600 other targets, a crowd's worth, and its count holds");
+        for (int i = 0; i < Bow.Misses.REMEMBERED; i++) {
+            Bow.Misses.missed(UUID.randomUUID());
+            if (i % 100 == 0) assertFalse(Bow.Misses.worthIt(kept), "asked about all along, it is kept");
+        }
         assertEquals(Bow.Misses.REMEMBERED, Bow.Misses.remembered());
-        assertTrue(Bow.Misses.worthIt(first), "the oldest was forgotten");
+        assertTrue(Bow.Misses.worthIt(first), "the one asked about longest ago was forgotten");
+        assertFalse(Bow.Misses.worthIt(kept));
     }
 }

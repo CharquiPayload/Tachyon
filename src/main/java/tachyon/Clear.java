@@ -321,9 +321,21 @@ final class Clear extends Job {
         }
     }
 
+    /**
+     * It ends, or is set aside (a reflex took the body). A block its last stroke broke is
+     * counted here: it is counted on the tick after the stroke ({@link #act}), and a reflex
+     * that takes the body in between would have it gone and never counted, the box cleared
+     * with numbers too low.
+     */
     @Override
     void end(Bots.Bot p) {
-        if (breaking != null) action(p.body, breaking, ServerboundPlayerActionPacket.Action.ABORT_DESTROY_BLOCK);
+        if (breaking != null && !Area.breakable(area.level, breaking)) {
+            broken++;
+            area.broken++;
+            area.todo.remove(breaking);
+        } else if (breaking != null) {
+            action(p.body, breaking, ServerboundPlayerActionPacket.Action.ABORT_DESTROY_BLOCK);
+        }
         area.release(breaking, p);
         area.release(goal, p);
         breaking = null;

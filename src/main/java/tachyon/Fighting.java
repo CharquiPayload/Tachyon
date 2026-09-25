@@ -19,10 +19,10 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.monster.Creeper;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 
+import java.util.Comparator;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,7 +44,10 @@ import java.util.concurrent.CompletableFuture;
  *
  * <p>An attack is not an order: it takes the hands for a few hits ({@link Bots#holdHands})
  * and leaves what the bot was doing as it was, walking and all; its brain gets how it went
- * once the hits are over, a few seconds later, as the answer of the tool.
+ * once the hits are over, a few seconds later, as the answer of the tool. Unnamed, what it
+ * hits is the nearest mob hostile to it ({@link Threats#hostile}: not a calm enderman), and
+ * what it says is out of reach is only what it sees: a player in its place knows nothing
+ * of the zombie behind the wall.
  */
 final class Fighting implements Ability {
 
@@ -108,9 +111,13 @@ final class Fighting implements Ability {
         Strikes s = STRIKES.get(p);
         if (s == null || s.hits >= s.times) return;
         BotPlayer b = p.body;
-        // The best weapon again before each hit: switching resets the charge, as a player's.
-        Job.wield(p, Gear::weapon);
         b.lookAt(EntityAnchorArgument.Anchor.EYES, s.target.getBoundingBox().getCenter());
+        // The best weapon again before each hit. One brought to hand hits from the next tick:
+        // the game starts its charge again and gives the hand its damage after this tick's
+        // hands, as a player's; hit now, the old item's damage would land under its name.
+        ItemStack before = b.getMainHandItem();
+        Job.wield(p, Gear::weapon);
+        if (b.getMainHandItem() != before) return;
         if (b.getAttackStrengthScale(0.5f) < 1.0f) return;
         ItemStack hand = b.getMainHandItem();
         s.with = hand.isEmpty() ? "my bare hands" : Gear.id(hand);
@@ -196,24 +203,24 @@ final class Fighting implements Ability {
         if (STRIKES.containsKey(p)) return CompletableFuture.completedFuture("I am attacking already");
         if (!Bots.handsFree(p)) return CompletableFuture.completedFuture("my hands are busy right now (" + Wielding.busy(p) + ")");
         LivingEntity nearest = null, inReach = null;
-        double nearestD = LOOK * LOOK, inReachD = Double.MAX_VALUE;
         Prey wanted = prey;
-        for (LivingEntity e : b.level().getEntitiesOfClass(LivingEntity.class, b.getBoundingBox().inflate(LOOK),
-                e -> wanted != null ? wanted.matches(p, e) : e instanceof Enemy && !(e instanceof Creeper) && e.isAlive())) {
-            double d = e.distanceToSqr(b);          // a sphere, not the box's corners: 24 means 24
-            if (d < nearestD) {
-                nearestD = d;
-                nearest = e;
-            }
-            if (d < inReachD && reach(p, e)) {
-                inReachD = d;
-                inReach = e;
-            }
+        List<LivingEntity> found = b.level().getEntitiesOfClass(LivingEntity.class, b.getBoundingBox().inflate(LOOK),
+                e -> (wanted != null ? wanted.matches(p, e) : !(e instanceof Creeper) && Threats.hostile(e, b))
+                        && e.distanceToSqr(b) <= LOOK * LOOK);           // a sphere, not the box's corners: 24 means 24
+        found.sort(Comparator.comparingDouble(e -> e.distanceToSqr(b)));
+        int tried = 0;
+        for (LivingEntity e : found) {
+            // The nearest it sees, and the nearest in its reach: the sight tried on a few, the nearest first.
+            if (tried++ >= Hunt.SIGHTS_MAX || inReach != null) break;
+            if (!Hunt.noticed(b, e)) continue;
+            if (nearest == null) nearest = e;
+            if (reach(p, e)) inReach = e;
         }
+        double nearestD = nearest == null ? 0 : nearest.distanceToSqr(b);
         String kind = prey != null ? prey.words() : "hostile mob";
         if (inReach == null) {
             if (nearest == null) {
-                return CompletableFuture.completedFuture("there is no " + kind + " within " + (int) LOOK + " blocks"
+                return CompletableFuture.completedFuture("I see no " + kind + " within " + (int) LOOK + " blocks"
                         + (prey == null ? " (creepers I do not hit unless told to by name)" : ""));
             }
             return CompletableFuture.completedFuture(String.format("the nearest %s is %d blocks away %s, at %s: out of my"

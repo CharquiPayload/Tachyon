@@ -30,11 +30,13 @@ import java.util.Map;
  * a creeper, backing off, coming up for air: whatever holds its body) nor of a fight,
  * unless it is starving: a steak in hand next to a creeper is the silliest way to die.
  *
- * <p><b>What it tells its owner</b> ({@link Notices}), once when it happens, every 2 s at
- * most: hungry (hunger 8 or less) with nothing it may eat (and what it carries that it does
- * not eat on its own, and why); its bow out of arrows; a piece of armor it wears, or the
- * tool in its hand, about to break ({@link #SPENT 15%} of its uses left, when something can
- * still be done). A full backpack is {@link Tossing}'s to tell.
+ * <p><b>What it tells its owner</b> ({@link Notices}), once when it happens (looked at
+ * every 2 s): hungry (hunger 8 or less) with nothing it may eat (and what it carries that
+ * it does not eat on its own, and why), told again only once it has eaten and gone hungry
+ * again; its bow out of arrows; a piece of armor it wears, or the tool in its hand, about
+ * to break ({@link #SPENT 15%} of its uses left, when something can still be done). Each is
+ * a paid call to its model, with {@code notices} brain: never the same news every ten
+ * minutes. A full backpack is {@link Tossing}'s to tell.
  *
  * <p>Masurium's other needs wait for what they need: cooking raw food (no furnace yet),
  * and what to do when it has had nothing to do for 20 minutes (standing orders).
@@ -60,6 +62,8 @@ final class Needs implements Ability {
     private static final class Seen {
         long nextBite;
         boolean hadArrows;
+        /** Its owner was told it is hungry with nothing to eat: not again until it is not. */
+        boolean toldHungry;
         /** The worn piece, or the tool in hand, it told of, by where it is. */
         final Map<EquipmentSlot, ItemStack> worn = new EnumMap<>(EquipmentSlot.class);
     }
@@ -89,6 +93,7 @@ final class Needs implements Ability {
         int food = b.getFoodData().getFoodLevel();
         String why = hungry(food, b.getHealth(), b.getMaxHealth());
         if (why != null) eat(p, now, food, why);
+        if (food > HUNGRY) p.slot(Seen.class, Seen::new).toldHungry = false;          // fed: the next time is news
         if (phase == 0) watch(p);
     }
 
@@ -102,7 +107,7 @@ final class Needs implements Ability {
         seen.nextBite = now + RETRY;
         BotPlayer b = p.body;
         if (Eating.bestFood(p) < 0) {
-            if (food <= HUNGRY) Notices.say(p, "hunger", nothingToEat(p));
+            if (food <= HUNGRY && !seen.toldHungry) seen.toldHungry = Notices.say(p, "hunger", nothingToEat(p));
             return;
         }
         String no = Eating.eatBest(p, this);

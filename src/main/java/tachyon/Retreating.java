@@ -19,32 +19,37 @@ import java.util.Set;
 
 /**
  * Backing off when badly hurt, Masurium's retreat: with {@link #BADLY_HURT 6 health} or less
- * (or poisoned), and something hostile at hand, it drops what it is doing and backs off, up
- * to {@link #FLEE_FAR 40 blocks} straight away at a time, and does not stop until nothing
- * hostile is left within {@link #SAFE 24 blocks}, health or no health: it heals as it
- * walks, and stopping as soon as it had a little back is how the zombie behind caught up
- * with a Masurium bot, over and over. Then it goes back to what it was doing: a pause,
- * not an order given up ({@link Bots#takeOver}).
+ * (or poisoned), and something hostile at hand, it drops what it is doing and backs off,
+ * toward anywhere {@link #FLEE_FAR 40 blocks} from it at a time, and does not stop until
+ * nothing hostile is left within {@link #SAFE 24 blocks} that it makes out, health or no
+ * health: it heals as it walks, and stopping as soon as it had a little back is how the
+ * zombie behind caught up with a Masurium bot, over and over. Then it goes back to what it
+ * was doing: a pause, not an order given up ({@link Bots#takeOver}).
  *
  * <p>Two conditions, on purpose. Low health alone is no emergency (digging with two hearts
  * in an empty mine kills nobody, and a bot that stops to wait for food it has not got
  * stays stopped for ever); what kills is low health with something that hits. That is
  * whatever hurt it in the last 15 s, at any distance up to {@link #ATTACKER 25} (a skeleton
  * shoots from fifteen blocks and stays there: a Masurium bot died of one without moving,
- * the retreat looking only near), or a hostile mob within {@link #NEAR 12} that it sees
- * (or that is within 4, round a corner). Once backing off it looks out to 24, sight or not:
- * a zombie behind a tree is still coming. Creepers are left to {@link Creepers}, which
- * knows more about them.
+ * the retreat looking only near), or a mob hostile to it ({@link Threats#hostile}) within
+ * {@link #NEAR 12} that it sees (or that is within 4, round a corner). Once backing off it
+ * looks out to 24: what it sees or has within 4, and, out of its sight, what is after it
+ * (a zombie behind a tree is still coming) within {@link #BELOW 8} blocks up or down; not
+ * what walks the cave under its feet, unseen and not after it, which is no reason to back
+ * off for ever. Creepers are left to {@link Creepers}, which knows more about them.
  *
  * <p>The way off is a route to anywhere 40 blocks from what it backs off from (24, in a
  * closed place with nowhere that far), walked a stretch at a time, sprinting while it has
  * the food for it (above 6, as a player), never building or breaking: fleeing is for now.
  * The creepers' escape uses it too ({@link #away}). With no way off (cornered), its owner
  * is told, and it keeps looking for one; cornered for 30 s, it stands its ground, for 30 s
- * more. Its {@code retreat_when_hurt} setting turns it off.
+ * more. Backing off for {@link #RETREAT_MAX 60 s} with something still after it, it stands
+ * its ground too, for 30 s: a bot that backs off all night does nothing else, and it has
+ * its guard. Its {@code retreat_when_hurt} setting turns it off.
  *
  * <p>Health drops only with a hit (a poison's too), so it looks at nothing until a hit leaves
  * a bot badly hurt: reading every bot's health every tick cost more than all the rest of it.
+ * Then it looks on the bot's next tick, and every 10 ticks after.
  */
 final class Retreating implements Ability {
 
@@ -65,12 +70,14 @@ final class Retreating implements Ability {
     static final double ATTACKER = 25, NEAR = 12, SAFE = 24;
     /** How far it heads away: with 16, routes ended at nine and the zombie caught up walking. */
     static final double FLEE_FAR = 40;
-    /** A mob this close counts, seen or not. */
-    static final double CLOSE = 4;
+    /** A mob this close counts, seen or not; and one after it, unseen, this far up or down at most. */
+    static final double CLOSE = 4, BELOW = 8;
     /** A way off is searched again this often, when it is not walking one. */
     static final int REPLAN = 10;
     /** Cornered this long, it gives up backing off: 30 s. */
     static final int CORNERED_MAX = 20 * 30;
+    /** Backing off this long, it stands its ground: 60 s. */
+    static final int RETREAT_MAX = 20 * 60;
 
     /**
      * Who hurt a bot last, and when (its slot): what it backs off from first; and, after it
@@ -80,6 +87,8 @@ final class Retreating implements Ability {
         LivingEntity by;
         long at;
         long standUntil;
+        /** A hit just left it badly hurt: looked at on its next tick, not its next look's. */
+        boolean fresh;
     }
 
     /** A bot backing off: from what, since when, and how the search for a way off goes. */
@@ -110,8 +119,9 @@ final class Retreating implements Ability {
     @Override
     public void settings(Settings settings) {
         settings.bool(RETREAT, true, "whether it breaks off what it is doing and backs off when badly hurt (6 health or"
-                        + " less, or poisoned) with something hostile at hand, until nothing hostile is within 24 blocks",
-                Settings.Who.OWNER).label("Back off when badly hurt").group("Fighting").advanced();
+                        + " less, or poisoned) with something hostile at hand, until it makes out nothing hostile within 24"
+                        + " blocks (a minute at most)",
+                Settings.Who.OWNER).label("Back off when badly hurt").group("Life").basic();
     }
 
     /**
@@ -121,7 +131,10 @@ final class Retreating implements Ability {
      */
     @Override
     public void hurt(Bots.Bot p, DamageSource source, float amount) {
-        if (badlyHurt(p.body)) LOW.add(p);
+        if (badlyHurt(p.body)) {
+            LOW.add(p);
+            p.slot(Hurt.class, Hurt::new).fresh = true;
+        }
         if (!(source.getEntity() instanceof LivingEntity by) || by == p.body || by instanceof Creeper) return;
         Hurt h = p.slot(Hurt.class, Hurt::new);
         h.by = by;
@@ -139,13 +152,18 @@ final class Retreating implements Ability {
         Retreat r = RETREATS.get(p);
         BotPlayer b = p.body;
         if (r == null) {
-            // Badly hurt by a hit: looked at every 10 ticks, until it is not.
-            if (!LOW.contains(p) || !Threats.due(p, now)) return;
+            // Badly hurt by a hit: looked at at once, then every 10 ticks, until it is not. At
+            // once: half a second is five blocks walked, and a bot walking off on its order
+            // was out of the 12 that count before its next look.
+            if (!LOW.contains(p)) return;
+            Hurt h = p.slot(Hurt.class, Hurt::new);
+            if (!h.fresh && !Threats.due(p, now)) return;
+            h.fresh = false;
             if (!badlyHurt(b)) {
                 LOW.remove(p);
                 return;
             }
-            if (!Settings.bool(p, RETREAT) || now < p.slot(Hurt.class, Hurt::new).standUntil) return;
+            if (!Settings.bool(p, RETREAT) || now < h.standUntil) return;
             LivingEntity from = hostile(p, now, false);
             if (from == null) return;
             r = new Retreat(from, now);
@@ -164,6 +182,15 @@ final class Retreating implements Ability {
                 return;
             }
             r.from = from;
+            if (now - r.since >= RETREAT_MAX) {
+                // Backed off a minute, and still something after it: running on is doing
+                // nothing else; it goes on with what it was doing, its guard's hands ready,
+                // and for as long again it does not start over.
+                p.slot(Hurt.class, Hurt::new).standUntil = now + CORNERED_MAX;
+                end(p, r, "backed off for " + RETREAT_MAX / 20 + " s with " + Threats.a(from) + " still after it; it stands its"
+                        + " ground");
+                return;
+            }
         }
         String doing = "backing off: " + health(b) + " health, " + Threats.a(r.from) + " " + Threats.blocks(b.distanceTo(r.from))
                 + " away";
@@ -245,8 +272,9 @@ final class Retreating implements Ability {
 
     /**
      * What it backs off from: whatever hurt it in the last 15 s, alive and within 25 (not a
-     * creeper); else the nearest hostile mob (not a creeper) within 12 that it makes out,
-     * or, once backing off, within 24 seen or not. Null: nothing.
+     * creeper); else the nearest mob hostile to it (not a creeper) within 12 that it makes
+     * out; or, once backing off, within 24, that it makes out or that is after it (its
+     * target) within 8 up or down. Null: nothing.
      */
     private static LivingEntity hostile(Bots.Bot p, long now, boolean backingOff) {
         BotPlayer b = p.body;
@@ -261,7 +289,9 @@ final class Retreating implements Ability {
         for (Mob m : Threats.around(p, now)) {
             if (m instanceof Creeper) continue;
             double d = m.distanceToSqr(b);
-            if (d > bestD || !backingOff && !Threats.noticed(b, m, CLOSE)) continue;
+            if (d > bestD) continue;
+            boolean after = backingOff && m.getTarget() == b && Math.abs(m.getY() - b.getY()) <= BELOW;
+            if (!after && !Threats.noticed(b, m, CLOSE)) continue;
             best = m;
             bestD = d;
         }

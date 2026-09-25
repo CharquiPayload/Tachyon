@@ -25,8 +25,9 @@ import java.util.Locale;
  * <p>A command hunts as many as it says, or, without a count, every one the bot finds. Its
  * brain hunts 8 at most, 8 when it is not told how many (Masurium's rule: "hunt cows" is
  * not every cow), or with 0 every one it finds; it may name several kinds, and which way to
- * go looking when none is in sight. Players are never hunted: a kill goes after one, by
- * name, when the operators allow it ({@link Fighting}).
+ * go looking when none is in sight. Every one it finds is not for ever: a hunt stops by
+ * itself once a search for more finds none ({@link Hunt}). Players are never hunted: a kill
+ * goes after one, by name, when the operators allow it ({@link Fighting}).
  */
 final class Hunting implements Ability {
 
@@ -64,7 +65,7 @@ final class Hunting implements Ability {
                 List.of(Tool.param("mob", "string", "The mob, as Minecraft names it: cow, pig, sheep, chicken, zombie...;"
                                 + " several separated by commas (cow,pig) for the nearest of any"),
                         Tool.optional("count", "integer", "How many to kill, 1 to 8; 8 when the person did not say;"
-                                + " 0 for every one you find, until told to stop"),
+                                + " 0 for every one you find; you stop by yourself once a search for more finds none"),
                         Tool.optional("toward", "string", "Which way to go looking if you see none: north, south, east"
                                 + " or west; the way you face when not said")),
                 call -> {

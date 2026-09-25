@@ -11,15 +11,19 @@ import java.util.Map;
 
 /**
  * What a bot's body tells its owner without being asked: how going back for its things
- * after a death went, a player who keeps hitting it. Any ability says it with
- * {@link #say}; its {@code notices} setting says how it reaches its owner:
+ * after a death went, a player who keeps hitting it, what it could not deal with by itself.
+ * Any ability says it with {@link #say}; its {@code notices} setting says how it reaches
+ * its owner, and its owner alone (these say where it died, where its things lie, where it
+ * is cornered: nobody else's business):
  * <ul>
- * <li>{@code brain} (the default): its brain says it in its own words, in the chat, in one
- *     call to its model with no tools, as it tells how an order went ({@link Brain#report});</li>
+ * <li>{@code brain} (the default): its brain says it in its own words, in one call to its
+ *     model with no tools, as it tells how an order went, whispered to its owner
+ *     ({@link Brain#report});</li>
  * <li>{@code plain}: a fixed line to its owner, {@code [tachyon] Ada: ...}, no call;</li>
  * <li>{@code off}: nothing.</li>
  * </ul>
- * A bot without a brain set up (no {@code url}) says it plainly.
+ * A bot without a brain set up (no {@code url}) says it plainly. A full backpack goes to
+ * its brain with its tools ({@link Tossing}), and follows this setting too.
  *
  * <p>Two brakes, since a call to a model is paid for and a flood of lines is noise: each
  * kind of notice is said at most once every {@link Rest#REST_MS 10 minutes} per bot, and
@@ -39,8 +43,9 @@ final class Notices implements Ability {
     @Override
     public void settings(Settings settings) {
         settings.choice(NOTICES, BRAIN, OPTIONS, "how it tells its owner what nobody asked about (how going back"
-                        + " for its things went, a player hitting it): brain, in its own words (a call to its model);"
-                        + " plain, a fixed line; off, not at all", Settings.Who.OWNER)
+                        + " for its things went, a player hitting it, a full backpack, what it could not deal with):"
+                        + " brain, in its own words, to its owner alone (a call to its model); plain, a fixed line;"
+                        + " off, not at all", Settings.Who.OWNER)
                 .label("Notices to its owner").group("Brain").basic();
     }
 

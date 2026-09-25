@@ -10,6 +10,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.BowItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
@@ -19,7 +20,8 @@ import java.util.UUID;
 
 /**
  * The bow, as a player's hands work it: into the hand, drawn, aimed, let go. What to shoot
- * at, and what to make of a shot, is the caller's (the {@link Shoot} job); only the
+ * at, and what to make of a shot, is the caller's (the {@link Shoot} job, the answer to an
+ * attacker in {@link Defending}, the shot at a creeper in {@link Creepers}); only the
  * gesture is here, and the few rules no shot breaks.
  *
  * <p>The draw is the bow's own use, as the server runs a player's: {@code gameMode.useItem}
@@ -256,7 +258,10 @@ final class Bow {
     /**
      * Whether another player is on top of the target (within 3 blocks of it) or near the
      * line of fire (within 1.5 of it), extended 8 blocks past the target: an arrow does not
-     * choose. A target that is itself a player is not in its own way.
+     * choose. A target that is itself a player is not in its own way. Only the players in a
+     * box round the line are looked at, not every player of the level: every bot is one, and
+     * a horde's archers would each go through all of them. Asked as the arrow is let go
+     * ({@link #step}), not on every tick of a draw.
      */
     static boolean someoneInTheLine(BotPlayer b, LivingEntity target) {
         Vec3 eyes = b.getEyePosition();
@@ -265,7 +270,9 @@ final class Bow {
         double length = line.length();
         if (length < 0.01) return false;
         Vec3 dir = line.scale(1 / length);
-        for (Player other : b.level().players()) {
+        Vec3 past = middle.add(dir.scale(8.0));
+        AABB box = new AABB(eyes, past).inflate(3.0);
+        for (Player other : b.level().getEntitiesOfClass(Player.class, box)) {
             if (other == b || other == target || !other.isAlive() || other.isSpectator()) continue;
             Vec3 c = other.position().add(0, other.getBbHeight() * 0.5, 0);
             if (c.distanceTo(middle) < 3.0) return true;
@@ -285,12 +292,13 @@ final class Bow {
      * them). {@value #PATIENCE} arrows that do not lower its health and it is left alone,
      * until it hurts a bot, which shows it can reach and be reached. A Masurium bot once
      * emptied twenty arrows into a creeper it never touched: a block ate every shot. The last
-     * {@value #REMEMBERED} targets are remembered, the oldest forgotten first. The server's
-     * thread's.
+     * {@value #REMEMBERED} targets asked about are remembered, the one asked about longest ago
+     * forgotten first: more than any crowd of archers aims at in a while (a horde of 500 aims
+     * at 500 at most), so a count is not forgotten before it adds up. The server's thread's.
      */
     static final class Misses {
         static final int PATIENCE = 3;
-        static final int REMEMBERED = 64;
+        static final int REMEMBERED = 1024;
 
         private static final Map<UUID, Integer> BY_TARGET = new LinkedHashMap<>(16, 0.75f, true) {
             @Override

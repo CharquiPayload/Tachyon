@@ -51,6 +51,18 @@ abstract class Job {
     }
 
     /**
+     * {@link #hold}, saying whether what is in the hand changed. A hit waits for the next
+     * tick then, as a player's must: the game starts the new item's charge again, and gives
+     * the hand its damage, in the body's own tick, after this one's hands; hit now, it would
+     * land with the old item's damage and charge.
+     */
+    static boolean swapped(Bots.Bot p, ToDoubleFunction<ItemStack> score) {
+        ItemStack before = p.body.getMainHandItem();
+        hold(p, score);
+        return p.body.getMainHandItem() != before;
+    }
+
+    /**
      * The best in the inventory by {@code score} into the hand: selected if it is in the
      * hotbar, brought up from the backpack if it is not, into the hotbar slot Masurium's
      * rule gives up ({@link Gear#toHand}). Nothing better than what is held, nothing

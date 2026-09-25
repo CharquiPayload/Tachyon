@@ -18,6 +18,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
@@ -48,8 +49,11 @@ import java.util.Set;
  * anyone else, player or bot, picks it up as usual, since that is what it was tossed for.
  * A Masurium bot once tossed 768 cobblestone as asked, walked past the pile, and carried 704
  * again three minutes later; only the server can refuse a pickup, and it does here
- * ({@link ItemEntityPickupEvent.Pre}). What a bot drops as it dies has no thrower, so it
- * does get that back.
+ * ({@link ItemEntityPickupEvent.Pre}). Nor does a bot pick up what another bot tossed as its
+ * trash ({@link #TOSSED_AS_TRASH}), if it is trash to it too: bots working together would
+ * pass their trash back and forth, each toss a new item with five fresh minutes to lie
+ * there, and it would never go. (What a bot tosses to someone on purpose, anyone takes.)
+ * What a bot drops as it dies has no thrower, so it does get that back.
  *
  * <p><b>Its trash</b> ({@link #TRASH}: cobblestone, cobbled deepslate, tuff, granite,
  * diorite, andesite, dirt and gravel to start with, which its brain may change, as
@@ -59,7 +63,10 @@ import java.util.Set;
  * trash block it can build with (it plugs gaps and crosses ravines with it): the one in its
  * hand, else the biggest; and never what it is using right now. The check is made on a
  * pickup, the only way a backpack fills while it works, so it costs nothing while nothing
- * comes in.
+ * comes in. What it tossed, and a backpack full with nothing to toss, its brain hears (a
+ * paid call, once in 10 minutes at most, with its tools: it may toss something); its
+ * {@code notices} setting has the last word: {@code plain}, a line to its owner instead,
+ * with no call; {@code off}, nothing.
  */
 final class Tossing implements Ability {
 
@@ -75,6 +82,8 @@ final class Tossing implements Ability {
     private static final long NOTICE_MS = 10 * 60_000L;
     /** A person it tosses to: this far at most, as far as a player makes out someone to throw to. */
     private static final double SEE = 64;
+    /** The tag on what a bot tossed as its trash (kept with the item, as a command's tags are). */
+    static final String TOSSED_AS_TRASH = "tachyon_trash";
 
     /**
      * The bots that picked something up, or touched something they had no room for, since
@@ -106,9 +115,11 @@ final class Tossing implements Ability {
         bus.addListener(ItemEntityPickupEvent.Pre.class, e -> {
             Bots.Bot p = Bots.of(e.getPlayer());
             if (p == null) return;
-            // What it tossed itself stays on the ground for it: never picked up again.
+            // What it tossed itself stays on the ground for it: never picked up again. Nor
+            // what another bot tossed as trash that is its trash too: it would only toss it again.
             Entity thrower = e.getItemEntity().getOwner();
-            if (thrower != null && thrower.getUUID().equals(e.getPlayer().getUUID())) {
+            if (thrower != null && thrower.getUUID().equals(e.getPlayer().getUUID())
+                    || e.getItemEntity().getTags().contains(TOSSED_AS_TRASH) && trash(p, e.getItemEntity().getItem())) {
                 e.setCanPickup(TriState.FALSE);
                 return;
             }
@@ -158,13 +169,23 @@ final class Tossing implements Ability {
         if (f.told || ms - f.toldAt < NOTICE_MS) return;
         f.told = true;
         f.toldAt = ms;
+        String how = Settings.choice(p, Notices.NOTICES);
+        if (how.equals(Notices.OFF)) return;
+        boolean brain = how.equals(Notices.BRAIN) && !Brain.config().url(p.name()).isEmpty();
         if (!tossed.isEmpty() && !full) {
-            Bots.brain(p).notice("Your backpack was full: you tossed " + what + " (your trash list) to make room."
-                    + " Tell your owner only if it matters to them.");
-        } else {
+            if (brain) {
+                Bots.brain(p).notice("Your backpack was full: you tossed " + what + " (your trash list) to make room."
+                        + " Tell your owner only if it matters to them.");
+            } else {
+                Notices.say(p, "backpack", "its backpack was full: it tossed " + what + " (its trash) to make room");
+            }
+        } else if (brain) {
             Bots.brain(p).notice("Your backpack is full (36 of 36 slots) and nothing in it is on your trash list: what you"
                     + " walk over stays on the ground. If your owner wants, toss something (toss) or add to your trash list"
                     + " (trash); tell them only if it matters.");
+        } else {
+            Notices.say(p, "backpack", "its backpack is full (36 of 36 slots) and nothing in it is its trash: what it walks"
+                    + " over stays on the ground");
         }
     }
 
@@ -200,7 +221,10 @@ final class Tossing implements Ability {
                 if (i == keep) continue;
                 ItemStack s = inv.removeItemNoUpdate(i);
                 int n = s.getCount();
-                if (b.drop(s, true) != null) tossed.merge(Gear.id(e.getKey()), n, Integer::sum);
+                ItemEntity thrown = b.drop(s, true);
+                if (thrown == null) continue;
+                thrown.addTag(TOSSED_AS_TRASH);
+                tossed.merge(Gear.id(e.getKey()), n, Integer::sum);
             }
         }
         return tossed;
@@ -280,7 +304,9 @@ final class Tossing implements Ability {
         String looking = "";
         if (!to.isEmpty()) {
             ServerPlayer whom = b.getServer().getPlayerList().getPlayerByName(to);
-            if (whom != null && whom != b && whom.level() == b.level() && whom.distanceTo(b) <= SEE) {
+            // Someone it sees: a throw at a name behind a wall would find the wall, and a
+            // player in its place would not know where they are.
+            if (whom != null && whom != b && whom.level() == b.level() && whom.distanceTo(b) <= SEE && b.hasLineOfSight(whom)) {
                 // The throw flies where it looks, at once: the server's rotation is the one.
                 b.lookAt(EntityAnchorArgument.Anchor.EYES, whom.getEyePosition());
                 looking = String.format(" looking at %s (%.1f blocks away)", whom.getGameProfile().getName(), whom.distanceTo(b));

@@ -3,8 +3,10 @@ package tachyon;
 import net.minecraft.commands.arguments.EntityAnchorArgument;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.monster.Creeper;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
@@ -14,7 +16,15 @@ import java.util.UUID;
  * kill, taken down with the bow from 10 to 25 blocks away, in sight; farther, or out of
  * sight, it walks (a route to within 2 of it) until it has range and sight; closer than
  * 10 it goes in, and what is within reach it finishes with its best weapon, as anyone with
- * two hands would. It does not pick up what they drop: that is hunting.
+ * two hands would (a weapon brought to hand hits from the next tick, as {@link Hunt}'s). It
+ * does not pick up what they drop: that is hunting.
+ *
+ * <p>A creeper is never gone in on nor hit: it walks to within 16 of it at most, and shoots
+ * from there; closer, running from it is {@link Creepers}', which lets this kill do the
+ * shooting, and the kill takes it up again from farther off.
+ *
+ * <p>It takes only what it sees ({@link Hunt#noticed}), the nearest within 32 first and out
+ * to 128 every 2 s, each killer on a tick of its own, as {@link Hunt} does.
  *
  * <p>After each arrow it stays to watch the shot (a tick or two per 2.5 blocks, 30 at most):
  * neither drawing again nor walking while it flies, and the shot is judged by the target's
@@ -30,12 +40,14 @@ final class Shoot extends Job {
 
     /** The bow is for this far at most; the sword, for what is closer than {@link #CLOSE}. */
     private static final double SHOT_MAX = 25.0, CLOSE = 10.0;
-    /** Targets are looked for this far around: 128, what a player's game shows of the mobs around. */
-    static final double VIEW = 128.0;
+    /** Targets are looked for this far around, in sight: 128, as far as a player's game shows mobs. */
+    static final double VIEW = 128.0, NEAR = 32.0;
+    /** A creeper is gone toward to within this, and no nearer: it blows up. */
+    private static final double CREEPER_NEAR = Creepers.SAFE;
     /** This close, with no route left to walk, it walks straight at it. */
     private static final double CLOSE_IN = 3.5;
-    /** Without a target, one is looked for this often; a way to one searched no oftener. */
-    private static final int EVERY = 10;
+    /** Without a target, one is looked for this often, out to {@link #VIEW} this often; a way to one searched no oftener. */
+    private static final int EVERY = 10, FAR_EVERY = 40;
     /** With no count, it waits this long for more to come in sight before it is done. */
     private static final int NO_TARGET_TICKS = 600;
     /** A target it finds no way to for this long is let go of. */
@@ -55,7 +67,7 @@ final class Shoot extends Job {
     private int killed, arrows;
 
     private LivingEntity target;
-    private long lookedAt = -EVERY, noTargetSince = -1, plannedAt = -EVERY, walkUntil;
+    private long noTargetSince = -1, plannedAt = -EVERY, walkUntil;
     /** Where the target was at the last search for a way to it (NaN: none yet), and whether its answer is due. */
     private double planX = Double.NaN, planZ;
     private boolean awaiting;
@@ -107,10 +119,7 @@ final class Shoot extends Job {
             return false;
         }
         if (target != null && (!target.isAlive() || target.isRemoved() || target.level() != b.level() || !prey.matches(p, target))) {
-            if (target.isDeadOrDying() && target.getLastHurtByMob() == b) {
-                killed++;
-                letGo.clear();                 // the ones it could not reach get another chance
-            }
+            landed(b);
             target = null;
             inFlight = false;
         }
@@ -120,9 +129,10 @@ final class Shoot extends Job {
             return false;
         }
         if (target == null) {
-            if (now - lookedAt < EVERY) return true;
-            lookedAt = now;
-            target = choose(p);
+            if (!Hunt.due(p, now, EVERY)) return true;
+            boolean far = Hunt.due(p, now, FAR_EVERY);
+            target = choose(p, far);
+            if (target == null && !far) return true;        // the look out to 128 decides, every 2 s
             if (target == null) {
                 if (wanted == 0) {
                     if (noTargetSince < 0) noTargetSince = now;
@@ -169,7 +179,11 @@ final class Shoot extends Job {
             Bots.halt(p, status());
             return true;
         }
-        if (d <= CLOSE_IN && p.path == null && now >= routeOnlyUntil) return true;     // act() walks the last steps
+        boolean creeper = target instanceof Creeper;
+        // Near enough, and in sight: it shoots from here, or runs (Creepers). Out of sight, a
+        // route may find it sight, or finds nothing and the creeper is let go of.
+        if (creeper && d <= CREEPER_NEAR && p.path == null && b.hasLineOfSight(target)) return true;
+        if (!creeper && d <= CLOSE_IN && p.path == null && now >= routeOnlyUntil) return true;     // act() walks the last steps
         if (p.pending != null || now - plannedAt < EVERY) return true;
         boolean moved = Double.isNaN(planX) || Math.abs(target.getX() - planX) + Math.abs(target.getZ() - planZ) > Bots.MOVED;
         if (p.path != null && !moved) return true;
@@ -177,13 +191,25 @@ final class Shoot extends Job {
         planX = target.getX();
         planZ = target.getZ();
         awaiting = true;
-        Bots.plan(p, target.blockPosition(), 2.0, Hunt.chase(b), status());
+        Bots.plan(p, target.blockPosition(), creeper ? CREEPER_NEAR : 2.0, Hunt.chase(b), status());
         return true;
     }
 
-    /** Whether it shoots from here: in a bow's range, not too close, in sight, out of water, and not just blocked. */
+    /** Its target dead by its hand: counted, and the ones it could not reach get another chance. */
+    private void landed(BotPlayer b) {
+        if (target != null && target.isDeadOrDying() && target.getLastHurtByMob() == b) {
+            killed++;
+            letGo.clear();
+        }
+    }
+
+    /**
+     * Whether it shoots from here: in a bow's range, not too close (10; a creeper, which is
+     * never gone in on, 7, where its blast ends), in sight, out of water, and not just blocked.
+     */
     private boolean shooting(Bots.Bot p, double d, long now) {
-        return d > CLOSE && d <= SHOT_MAX && now >= walkUntil && !p.body.isInWater() && p.body.hasLineOfSight(target);
+        double min = target instanceof Creeper ? Creepers.EXPLOSION : CLOSE;
+        return d > min && d <= SHOT_MAX && now >= walkUntil && !p.body.isInWater() && p.body.hasLineOfSight(target);
     }
 
     /** An arrow in the air, watched: a hit once the target's health drops, a miss once its time is up. */
@@ -215,12 +241,13 @@ final class Shoot extends Job {
         if (target == null) return;
         BotPlayer b = p.body;
         long now = b.getServer().getTickCount();
-        if (inReach(p)) {
-            // On top of it: finished by hand, as anyone would, with the best weapon it has.
+        if (inReach(p) && !(target instanceof Creeper)) {
+            // On top of it: finished by hand, as anyone would, with the best weapon it has
+            // (brought to hand, it hits from the next tick). Never a creeper: it blows up.
             Bow.stop(p);
             Bots.release(b);
-            hold(p, Gear::weapon);
             b.lookAt(EntityAnchorArgument.Anchor.EYES, target.getBoundingBox().getCenter());
+            if (swapped(p, Gear::weapon)) return;
             if (b.getAttackStrengthScale(0.5f) >= 1.0f) {
                 b.attack(target);
                 b.swing(InteractionHand.MAIN_HAND);
@@ -235,7 +262,7 @@ final class Shoot extends Job {
         if (!shooting(p, d, now)) {
             Bow.stop(p);
             drawn = 0;
-            if (d <= CLOSE_IN && p.path == null && now >= routeOnlyUntil) {
+            if (d <= CLOSE_IN && p.path == null && now >= routeOnlyUntil && !(target instanceof Creeper)) {
                 if (d < closest - 0.3) {
                     closest = d;
                     stalled = 0;
@@ -275,9 +302,15 @@ final class Shoot extends Job {
         }
     }
 
+    /**
+     * It ends, or is set aside (a reflex took the body). A target it killed is counted here:
+     * it is counted on its next think, and a reflex that takes the body in between would
+     * have it dead and never counted.
+     */
     @Override
     void end(Bots.Bot p) {
         Bow.stop(p);
+        landed(p.body);
         target = null;
         inFlight = false;
         drawn = 0;
@@ -289,27 +322,21 @@ final class Shoot extends Job {
     }
 
     /**
-     * The nearest of what it was told to kill, within {@link #VIEW}, not let go of, and worth
-     * an arrow ({@link Bow.Misses}). Near first: the ring out to 128 only when there is none
-     * within 32, since the bigger look costs more.
+     * The nearest of what it was told to kill that it sees, within {@link #VIEW}, not let go
+     * of, and worth an arrow ({@link Bow.Misses}). Near first: the ring out to 128 only when
+     * there is none within 32 and it is a tick for the far look ({@code far}), since the
+     * bigger look costs more.
      */
-    private LivingEntity choose(Bots.Bot p) {
-        LivingEntity near = nearest(p, 32);
-        return near != null ? near : nearest(p, VIEW);
+    private LivingEntity choose(Bots.Bot p, boolean far) {
+        LivingEntity near = nearest(p, NEAR);
+        return near != null || !far ? near : nearest(p, VIEW);
     }
 
     private LivingEntity nearest(Bots.Bot p, double radius) {
         BotPlayer b = p.body;
-        LivingEntity best = null;
-        double bestD = radius * radius;
-        for (LivingEntity e : b.level().getEntitiesOfClass(LivingEntity.class, b.getBoundingBox().inflate(radius),
-                e -> prey.matches(p, e) && !letGo.contains(e.getUUID()) && Bow.Misses.worthIt(e.getUUID()))) {
-            double d = e.distanceToSqr(b);
-            if (d < bestD) {
-                bestD = d;
-                best = e;
-            }
-        }
-        return best;
+        List<LivingEntity> found = b.level().getEntitiesOfClass(LivingEntity.class, b.getBoundingBox().inflate(radius),
+                e -> prey.matches(p, e) && !letGo.contains(e.getUUID()) && Bow.Misses.worthIt(e.getUUID())
+                        && e.distanceToSqr(b) <= radius * radius);
+        return Hunt.nearestSeen(b, found, Set.of());
     }
 }

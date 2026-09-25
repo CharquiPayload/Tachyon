@@ -33,7 +33,6 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.portal.DimensionTransition;
 import net.minecraft.world.phys.BlockHitResult;
@@ -66,9 +65,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -172,11 +172,18 @@ public final class Bots {
      */
     private static final int ROUTE_THREADS = Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() / 4));
     private static final AtomicInteger ROUTE_THREAD_N = new AtomicInteger();
-    private static final ExecutorService ROUTES = Executors.newFixedThreadPool(ROUTE_THREADS, r -> {
+    /** A fixed pool, as Executors.newFixedThreadPool makes one, kept as what it is to ask how many searches wait. */
+    private static final ThreadPoolExecutor ROUTES = new ThreadPoolExecutor(ROUTE_THREADS, ROUTE_THREADS, 0L,
+            TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(), r -> {
         Thread t = new Thread(r, "tachyon-routes-" + ROUTE_THREAD_N.incrementAndGet());
         t.setDaemon(true);
         return t;
     });
+    /**
+     * Searches waiting for a routes thread, past which the searches an ability may do without
+     * (whether a creeper can walk to a bot) are not asked: the walks come first.
+     */
+    private static final int ROUTES_BUSY = 8 * ROUTE_THREADS;
 
     /** What the bots cost the server's thread, per tick, and what their searches took. */
     private static final Stats STATS = new Stats();
@@ -317,6 +324,8 @@ public final class Bots {
         long ticks, nanos, maxNanos, bodyTicks;
         long snapshots, snapshotNanos, maxSnapshotNanos;
         long searches, searchMs, maxSearchMs, nodes;
+        /** The searches waiting for a routes thread, summed over the ticks, and the most at the end of one. */
+        long waiting, maxWaiting;
         /** What the bots' bodies took in the tick running now. */
         long thisTick;
 
@@ -332,17 +341,19 @@ public final class Bots {
                     "%d bot(s). On the server's thread: %.3f ms a tick for all of them on average,"
                             + " %.3f at most, over %d ticks (%.3f ms a bot); of that, %d route snapshots,"
                             + " %.3f ms each, %.3f at most. Off it: %d searches, %.1f ms each, %d at most,"
-                            + " %d tiles looked at.",
+                            + " %d tiles looked at; %.1f waiting for a thread on average, %d at most.",
                     bots, ticks == 0 ? 0 : nanos / 1e6 / ticks, maxNanos / 1e6, ticks,
                     bodyTicks == 0 ? 0 : nanos / 1e6 / bodyTicks,
                     snapshots, snapshots == 0 ? 0 : snapshotNanos / 1e6 / snapshots, maxSnapshotNanos / 1e6,
-                    searches, searches == 0 ? 0 : (double) searchMs / searches, maxSearchMs, nodes);
+                    searches, searches == 0 ? 0 : (double) searchMs / searches, maxSearchMs, nodes,
+                    ticks == 0 ? 0 : (double) waiting / ticks, maxWaiting);
         }
 
         synchronized void reset() {
             ticks = nanos = maxNanos = bodyTicks = 0;
             snapshots = snapshotNanos = maxSnapshotNanos = 0;
             searches = searchMs = maxSearchMs = nodes = 0;
+            waiting = maxWaiting = 0;
         }
     }
 
@@ -615,10 +626,6 @@ public final class Bots {
         halt(p, doing);
     }
 
-    static void orderHunt(Bot p, EntityType<?> prey, String name, int count, Order by) {
-        orderHunt(p, new Hunt(Prey.of(prey), count, false, null), by);
-    }
-
     /** A hunt as Hunting makes it: kinds of mob, how many, which way to look (see {@link Hunt}). */
     static void orderHunt(Bot p, Hunt hunt, Order by) {
         orderJob(p, hunt, hunt.status(), by);
@@ -751,6 +758,11 @@ public final class Bots {
     /** The reflex that holds its body, or null. */
     static Ability holding(Bot p) {
         return p.heldBy;
+    }
+
+    /** Its job: the one it is at, or the one set aside while a reflex holds its body; null: none. */
+    static Job job(Bot p) {
+        return p.job != null ? p.job : p.aside != null ? p.aside.job() : null;
     }
 
     /**
@@ -1311,12 +1323,20 @@ public final class Bots {
             BotData.retry();
         }
         if (ALL.isEmpty()) return;
+        int queued = ROUTES.getQueue().size();
         synchronized (STATS) {
             STATS.ticks++;
             STATS.nanos += STATS.thisTick;
             STATS.maxNanos = Math.max(STATS.maxNanos, STATS.thisTick);
             STATS.thisTick = 0;
+            STATS.waiting += queued;
+            STATS.maxWaiting = Math.max(STATS.maxWaiting, queued);
         }
+    }
+
+    /** Whether the routes threads are behind: more searches wait than they get through in a moment. */
+    static boolean routesBusy() {
+        return ROUTES.getQueue().size() > ROUTES_BUSY;
     }
 
     // --- the keys, a tick at a time -----------------------------------------------------
@@ -1469,7 +1489,8 @@ public final class Bots {
      * A search of an ability's own, apart from any bot's walk (whether a creeper can walk to
      * a bot, say): {@code work} runs on a routes thread over the loaded chunks around
      * {@code a} and {@code b}, and its answer comes as a future, looked at on a later tick
-     * and never waited for on the server's thread. The snapshot is taken here, on it.
+     * and never waited for on the server's thread. The snapshot is taken here, on it. It
+     * counts in {@code /tachyon stats} as a search (its tiles are not counted).
      */
     static <T> Future<T> search(ServerLevel level, BlockPos a, BlockPos b, Function<SnapshotWorld, T> work) {
         long started = System.nanoTime();
@@ -1480,7 +1501,12 @@ public final class Bots {
             STATS.snapshotNanos += took;
             STATS.maxSnapshotNanos = Math.max(STATS.maxSnapshotNanos, took);
         }
-        return ROUTES.submit(() -> work.apply(world));
+        return ROUTES.submit(() -> {
+            long t0 = System.currentTimeMillis();
+            T answer = work.apply(world);
+            STATS.search(System.currentTimeMillis() - t0, 0);
+            return answer;
+        });
     }
 
     private static void follow(Bot p, long now) {
