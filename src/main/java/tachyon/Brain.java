@@ -226,7 +226,9 @@ final class Brain {
                     // Calls asked for with no tools offered are not run: kept, they would
                     // be calls with no results in the history, which APIs refuse.
                     if (!r.calls().isEmpty()) msgs.set(msgs.size() - 1, message("assistant", r.text()));
-                    answer = r.text().strip();
+                    answer = withoutState(r.text().strip());
+                    // Kept as said: a history with the state copied in teaches the copying.
+                    if (!answer.equals(r.text().strip())) msgs.set(msgs.size() - 1, message("assistant", answer));
                     break;
                 }
                 for (Llm.ToolCall call : r.calls()) {
@@ -314,8 +316,29 @@ final class Brain {
                 + "coordinates they did not ask for. If your tools cannot do what they ask, say so plainly "
                 + "and do not pretend. Your tools START things that take time (walking, following, hunting, "
                 + "clearing): after calling one, say you are on it, never that it is done; to know how it "
-                + "goes, use status. Never claim progress your state or a tool does not show. Each message starts with your state in brackets: use it, do not "
-                + "repeat it.";
+                + "goes, use status. Never claim progress your state or a tool does not show. Each message starts with your state in "
+                + "square brackets: it is for you only, never write it in your answer.";
+    }
+
+    /**
+     * The answer without the state line, which some models copy at its head although they
+     * are told not to: said in the chat, it reads as the bot thinking aloud. The state
+     * always begins "[you are at "; a line that starts so loses it, and the words after it
+     * on that line, if any, stay.
+     */
+    static String withoutState(String answer) {
+        StringBuilder out = new StringBuilder();
+        for (String line : answer.split("\\R")) {
+            String words = line.strip();
+            if (words.startsWith("[you are at ")) {
+                int close = words.indexOf(']');
+                words = close < 0 ? "" : words.substring(close + 1).strip();
+            }
+            if (words.isEmpty()) continue;
+            if (out.length() > 0) out.append('\n');
+            out.append(words);
+        }
+        return out.toString();
     }
 
     /** Where it is and how, and who speaks: at the head of what is said. On the server's thread. */
