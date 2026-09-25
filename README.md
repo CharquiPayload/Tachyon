@@ -717,6 +717,15 @@ One bot alone: 390 blocks over forest, hills and a lake with nothing loaded
 ahead, 110 s and 3 legs; 340 blocks of open sea, 110 s, 7 of its 8 legs swum
 straight on without a search.
 
+Gathering and getting there in one build cost what each did alone (100 bots,
+the builds taking turns in the same hour, the mean of each run): standing, 5.1–5.6
+ms against 5.2–5.4 ms for 0.3.0 and 5.6–5.7 ms for getting there alone; through the
+stone wall, 6.2–6.3 ms against 5.4–6.4 ms; over the canyon, 5.6–6.0 ms against
+5.9–6.2 ms, with the same searches and tiles. Gathering 64 dirt each, 6.9–7.2 ms
+in samples of 20 s (6.2–7.7 ms alone, in another hour).
+A search that may dig takes, with its snapshot, the arrays of the blocks players
+placed in its chunks (the level's own, not copied): a lookup per chunk, at most 400.
+
 ## Where to use it
 
 On your own servers, or on servers whose owners explicitly allowed your bots.
