@@ -90,7 +90,7 @@ final class Recover extends Job {
     boolean think(Bots.Bot p, long now) {
         if (!Settings.bool(p, Recovering.RECOVER)) {
             graves.running = null;
-            Bots.halt(p, "stopped going back for its things: recover_items is false");
+            Bots.halt(p, "stopped going back for its things: " + Settings.named(Recovering.RECOVER) + " is off");
             return false;
         }
         if (grave == null && !next(p, now)) return over(p, "had nothing left to go back for");
@@ -214,6 +214,7 @@ final class Recover extends Job {
         p.plannedAt = now;
         awaiting = true;
         Bots.plan(p, thing.blockPosition(), 1.0, status());
+        Bots.arriveWithin(p, Bots.ON_ITEM);
         return true;
     }
 

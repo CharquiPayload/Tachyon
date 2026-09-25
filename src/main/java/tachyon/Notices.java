@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * What a bot's body tells its owner without being asked: how going back for its things
@@ -54,9 +55,10 @@ final class Notices implements Ability {
     @Override
     public void settings(Settings settings) {
         settings.choice(NOTICES, BRAIN, OPTIONS, "It tells its owner what nobody asked about (how going back for its"
-                        + " things went, a player hitting it, a full backpack, what it could not deal with, a death, an"
-                        + " order given by a command that is over) in its own words, whispered to its owner alone (brain:"
-                        + " a call to its model), in a fixed line (plain), or not at all (off).", Settings.Who.OWNER)
+                        + " things went, a player hitting it, a full backpack, what it could not deal with, a death), and"
+                        + " whoever gave it an order by a command how that order ended: in its own words, whispered to"
+                        + " them alone (brain: a call to its model), in a fixed line (plain), or not at all (off).",
+                        Settings.Who.OWNER)
                 .label("Notices to its owner").group("Brain").basic();
         settings.bool(VERBOSE, false, "Its owner also gets the technical lines the server's log has about it (what it does"
                         + " by itself, with coordinates), for finding out what went wrong. When it is off, its owner hears"
@@ -96,7 +98,7 @@ final class Notices implements Ability {
      * What the mod itself must tell a player about a bot, once, when it happens: it died
      * and is back (or left), an order given to it by a command is over, its brain could not
      * think. Logged as {@code technical} always. With its {@code verbose} on, {@code to}
-     * gets that line as it is, with its coordinates (and its brain's words too, when its
+     * gets that line, with where the bot is when it names no place (and its brain's words too, when its
      * notices are said by its brain). Off, {@code text} goes as its {@code notices} setting
      * says: its brain says it in its words, whispered to {@code to}; or a plain line; or
      * nothing. On the server's thread.
@@ -116,7 +118,7 @@ final class Notices implements Ability {
         String how = Settings.choice(p, NOTICES);
         boolean brain = inItsWords && how.equals(BRAIN) && !Brain.config().url(p.name()).isEmpty();
         if (Settings.bool(p, VERBOSE)) {
-            pl.sendSystemMessage(Component.literal("[tachyon] " + technical));
+            pl.sendSystemMessage(Component.literal("[tachyon] " + placed(p, technical)));
             if (brain) Bots.brain(p).report(to, pl.getGameProfile().getName(), text);
             return;
         }
@@ -127,9 +129,10 @@ final class Notices implements Ability {
 
     /**
      * A technical line about a bot (a reflex taking over, a tool its brain called, what it
-     * gave up), with its coordinates: to the server's log, through the caller's logger; and,
-     * with its {@code verbose} on, to its owner too, if they are in the game. On the
-     * server's thread.
+     * gave up): to the server's log, through the caller's logger (whose lines carry the time,
+     * and keep their words for whoever reads or searches them); and, with its {@code verbose}
+     * on, to its owner too, if they are in the game, with where the bot is when the line says
+     * no place of its own ({@link #placed}). On the server's thread.
      *
      * @param text the line, the bot's name first, as the log has it
      */
@@ -137,7 +140,20 @@ final class Notices implements Ability {
         log.info("[tachyon] {}", text);
         if (p.owner == null || p.leaving() != null || !Settings.bool(p, VERBOSE)) return;
         ServerPlayer owner = p.body.getServer().getPlayerList().getPlayer(p.owner);
-        if (owner != null && owner != p.body) owner.sendSystemMessage(Component.literal("[tachyon] " + text));
+        if (owner != null && owner != p.body) owner.sendSystemMessage(Component.literal("[tachyon] " + placed(p, text)));
+    }
+
+    /** Three whole numbers in a row, as a place is written ("12 64 -30", "12, 64, -30"). */
+    private static final Pattern PLACE = Pattern.compile("-?\\d+,? -?\\d+,? -?\\d+");
+
+    /**
+     * A technical line, with where the bot stands when it says no place of its own: "Ada
+     * backs off: 5 health, a zombie 3 blocks away (at 12 64 -30)". A line for finding out
+     * what went wrong is little use without where.
+     */
+    static String placed(Bots.Bot p, String text) {
+        if (PLACE.matcher(text).find()) return text;
+        return text + " (at " + Brain.pos(p.body.blockPosition()) + ")";
     }
 
     /**

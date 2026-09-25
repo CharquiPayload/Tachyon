@@ -8,18 +8,26 @@ one does not mean editing them. The other way round, an ability uses what
 `Bots` and `Brain` offer: the command helpers, the orders, the legs, a bot's
 data, the brain's notices.
 
-Five exceptions, on purpose, because what they decide lives in the core:
-Walking's `sprint` setting is read in `Bots.canRun`, where the legs (routes,
-keys, doors) are; the legs also ask `Scaffolding` and `Tunnelling` whether a
-search may plan building or digging (their settings, the blocks it carries, its
-break list) and have them place and dig the blocks a route asks for, in
-`Bots.steer`; `Bots.died` asks `Respawning.staysDead` whether a bot that
-died comes back (its `respawn` setting, and the deaths it counts), and
-`Respawning.died` and `Respawning.where` for the words its owner hears, since a
-bot's coming and going is there; `Tools.offered` reads Talking's `brain_lite`,
-since which tools a brain is sent is decided there; and what the core must tell
-a player (a death, an order's end, a brain that could not think) goes through
-`Notices.tell`, whose settings (`notices`, `verbose`) say how.
+Some exceptions, on purpose, because what they decide lives in the core:
+
+- Walking's `sprint` setting is read in `Bots.canRun`, where the legs (routes,
+  keys, doors) are.
+- The legs ask `Scaffolding` and `Tunnelling` whether a search may plan building
+  or digging (their settings, the blocks it carries, its break list), take
+  `PlacedBlocks.of` for the snapshot of a search that may dig, and have them place
+  and dig the blocks a route asks for, in `Bots.steer` (with `Tunnelling.lavaAt`
+  for lava come into a tunnel); `Bots.halt` and `Bots.blocked` have them let go of
+  a tower or a block half dug (`Scaffolding.stop`, `Tunnelling.abort`).
+- `Bots.died` asks `Respawning.staysDead` whether a bot that died comes back (its
+  `respawn` setting, and the deaths it counts), and `Respawning.died` and
+  `Respawning.where` for the words its owner hears, since a bot's coming and
+  going is there.
+- `Tools.offered` reads Talking's `brain_lite`, since which tools a brain is
+  sent is decided there.
+- What the core must tell a player (a death, an order's end, a brain that could
+  not think) goes through `Notices.tell`, and its technical lines (a trip's
+  steps, the tools a brain called) through `Notices.technical`, whose settings
+  (`notices`, `verbose`) say how.
 
 This page is for whoever adds the next one. Read `Walking.java`, `Hunting.java`
 and `Hunt.java` alongside it: they are the smallest complete examples.
@@ -226,17 +234,19 @@ up), so protections and the tool's wear apply as to anyone; `Gather` has it in a
 few lines, a hand that changed mid-stroke starting it again. A job that breaks
 blocks **by itself** (not a box a person named) never breaks a build:
 `PlacedBlocks.byPlayer(level, pos)` says whether a player placed the block there
-(the server keeps it, per level, with the world), and `Gather.partOfBuild` is the
-rest of the rule (a block that touches a building block or a placed one; a log
-whose tree is none). A brain's tool that breaks a box looks first with
-`PlacedBlocks.count(level, a, b)`, as `clear`'s does, and sends a person to the
-command when there are any.
+(the server keeps it, per level, with the world: blocks placed from the hand as
+they are, not what an item's use grew), and `Gather.partOfBuild` is the rest of
+the rule (a block that touches a building block or a placed one; a log whose tree
+is none), for builds older than that record. A brain's tool that breaks a box
+looks first with `PlacedBlocks.count(level, a, b)` and `Clearing.looksBuilt(level,
+a, b)`, as `clear`'s does, and sends a person to the command when there are any.
 
 **Going out looking.** With none of what it wants in sight, a job does not stand
-still: `Legs` walks it out in legs of 48 blocks (300 blocks or 3 minutes at most,
-twice an errand, turning right when three legs get it nowhere), the job looking
-around as it walks and calling `legs.found()` once something is in sight; its
-`step` says, when the search is over, how far it looked, for the job's last line.
+still: `Scouting` walks it out in legs of 48 blocks (300 blocks or 3 minutes at
+most, twice an errand, turning right when three legs get it nowhere), the job
+looking around as it walks and calling `scouting.found()` once something is in
+sight; its `step` says, when the search is over, how far it looked, for the job's
+last line. `Hunt` and `Gather` go out looking with it.
 
 **What it goes after, it sees.** A job that picks a target (a mob to hunt, a
 player to throw to) takes only what a player in the bot's place would know of:
@@ -252,18 +262,27 @@ same tick.
 the walk's, `Bots.walkOptions(p, build, nodes)`: partial routes, as long a fall
 as its health allows (`Bots.safeFall`, Masurium's: 3 blocks, a block more for
 every 4 health, 12 at most), and digging through its break list when its
-`break_to_advance` is on, never through a block a player placed (the snapshot
-of a search that digs carries them, `SnapshotWorld.sparing`, and the dig step
-looks again at the block itself). Only trips and followers build; a job's walk
-may dig, as every walk may. A route searched with building or digging allowed is
-walked with those steps: the legs place the block a bridge or a tower needs, and
-dig the one in the way, before walking on. `Bots.arriveWithin(p, slack)`, after
-a `plan`, is how close to the last point the walk ends (1.4 blocks unless asked).
+`break_to_advance` is on, never through a piece of a build (the snapshot of a
+search that digs carries the blocks players placed, `SnapshotWorld.sparing`, and
+leaves out what touches a building block and what has lava over it or beside it;
+the dig step looks at the block itself again). Only trips and followers build.
+The walks planned with the walk's options may dig (a trip, a follower, a job's
+walk to a block or a grave); a chase, planned with `Hunt.chase(body)` (a hunt, a
+kill, going out looking, a pickup, a reflex backing off or answering an archer),
+never does: 40 ticks a block is no way to catch up, nor to get away. A route
+searched with building or digging allowed is walked with those steps: the legs
+place the block a bridge or a tower needs, and dig the one in the way, before
+walking on. `Bots.arriveWithin(p, slack)`, after a `plan`, is how close to the last
+point the walk ends: 1.4 blocks unless asked, `Bots.ON_ITEM` (0.4, Masurium's) for
+a walk onto an item on the ground, which a player picks up only when its box
+almost touches it.
 
 What the legs do for every walk, a job's too: a tile the body failed to get into
 (six jumps without getting closer to it) is left out of the bot's searches for
-90 s (`StuckSpots`), so the next search finds another way; a job's walk stops
-then, saying so, and the job searches again. `Bots.blocked(p, why)` is the same
+90 s (`StuckSpots`: not stood on, built onto nor dug into; `World.vetoed` for a
+step that makes its own floor), so the next search finds another way; never the
+tile a search starts from (`SnapshotWorld.startingAt`, from `Bots.whereAmI`). A
+job's walk stops then, saying so, and the job searches again. `Bots.blocked(p, why)` is the same
 for a step the walk cannot take (no block to build with, no permission to dig).
 A goto is a trip (`Trip`, `path/Leg.java`): walked a leg at a time and judged as a
 whole; a job that goes far walks stretches of partial routes and judges its own
@@ -371,7 +390,8 @@ Besides its tools, an ability can reach a bot's brain (`Bots.brain(p)`):
   whoever gave the order. Its `notices` decide how, as for `say`; with its
   `verbose` on, the technical line goes as it is.
 - **`Notices.technical(LOG, p, text)`**: a line about what a bot did (a reflex
-  taking the body, what it gave up), with its coordinates, the bot's name first:
+  taking the body, what it gave up), the bot's name first; its owner's copy of one
+  that says no place of its own gets where the bot stands:
   it goes to the server's log through the ability's own logger, and, with the
   bot's `verbose` on, to its owner too. Use it for every line of the log about one
   bot; players read no other line of the mod's but notices and commands' answers.
@@ -431,9 +451,13 @@ Two options are a switch.
   setting's name. Players read a switch as `on` or `off` everywhere
   (`Setting.words`); refusals name a setting by its label (`Setting.named`).
 - **Who**: `OWNER` (its owner and operators may change it) for what concerns
-  only the bot; `OPERATOR` for what concerns the server (what it may break,
-  whom it may fight). The menu shows an operators' setting to anyone else as
-  locked.
+  only the bot; `OPERATOR` for what concerns the server and everyone on it
+  (whom it may fight, the night everyone skips). What a bot breaks on its own to
+  make its way (`break_to_advance`, and its break list, `/tachyon break`) is its
+  owner's, as it was Masurium's: what keeps other players' world safe is not who
+  sets them but what no list overrides, a build is never dug, nor a place where the
+  server lets no player break (the spawn's protection, a claim). The menu shows an
+  operators' setting to anyone else as locked.
 - **The label** is the setting's name in the menu: a few words a player would
   say, 32 characters at most ("Come back after dying", not "respawn toggle").
 - **The group** puts it in a row with the settings of the same kind: a word or
@@ -600,7 +624,9 @@ not rewrite the rest.
 **What a bot needs only while it is in the game** (a timer, a cooldown, a
 count, a list of reminders) is not data: it goes in the bot's slot for your
 ability, `p.slot(Reminders.class, Reminders::new)`, made the first time and
-gone when the bot leaves. Never a field added to `Bots.Bot` for one ability.
+gone when the bot leaves (`p.slotIfMade(Reminders.class)`, null when it was never
+made, for code that only lets go of it: a tower half built, `Scaffolding.stop`).
+Never a field added to `Bots.Bot` for one ability.
 
 ## Threads
 

@@ -8,8 +8,12 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.saveddata.SavedData;
@@ -17,6 +21,7 @@ import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
 import net.neoforged.neoforge.event.level.BlockEvent;
+import net.neoforged.neoforge.event.level.BlockGrowFeatureEvent;
 import net.neoforged.neoforge.event.level.ExplosionEvent;
 
 import java.util.Arrays;
@@ -31,12 +36,17 @@ import java.util.Arrays;
  *
  * <p>A player sees a build for what it is; the server has only the blocks. So it keeps where
  * players placed them, as they place them (NeoForge's place event, by a player and not a
- * bot: what a bot places, a bot may take back), per level, with the world
+ * bot: what a bot places, a bot may take back; and only blocks placed from the hand as they
+ * are, not what an item's use changed: bone meal on a sapling fires a place event for all 61
+ * blocks of the tree it grows), per level, with the world
  * ({@code <dimension>/data/tachyon_placed.dat}, written with the chunks, so that the two
  * agree after a crash too). A place is forgotten when its block is broken (by anyone), blown
  * up, or found to be air or a liquid when asked about (burned, washed away). It is bounded:
- * past {@link #MAX} places in a level the oldest are forgotten, as a player forgets. What a
- * piston pushes, or sand a player placed that falls, is not followed to where it goes.
+ * past {@link #MAX} places in a level the oldest are forgotten, as a player forgets. A
+ * sapling that grows into a tree is forgotten as it grows: the tree grew, nobody built it,
+ * and the log that takes the sapling's place is no piece of a build. What a piston pushes,
+ * sand a player placed that falls, or a block an operator's {@code /fill} put over a placed
+ * one, is not followed.
  * Builds from before the mod was there are not in it: {@link Gather} also leaves alone what
  * touches a building block.
  */
@@ -62,16 +72,51 @@ final class PlacedBlocks implements Ability {
             Places places = of(level);
             for (BlockPos pos : e.getAffectedBlocks()) places.remove(pos);
         });
+        bus.addListener(EventPriority.LOWEST, BlockGrowFeatureEvent.class, PlacedBlocks::grows);
     }
 
-    /** A block placed: kept, if a player placed it. A bed or a door is two blocks, in one event. */
+    /**
+     * A block placed: kept, if a player placed it from the hand, as the block it is (the item
+     * in either hand is that block's): a bed or a door is two blocks, in one event. What an
+     * item's use changed around it (a tree bone meal grew, water a bucket poured) is not a
+     * build, and is not kept.
+     */
     private static void placed(BlockEvent.EntityPlaceEvent e) {
         if (!(e.getEntity() instanceof Player pl) || Bots.of(pl) != null || !(e.getLevel() instanceof ServerLevel level)) return;
         Places places = of(level);
         if (e instanceof BlockEvent.EntityMultiPlaceEvent many) {
-            for (BlockSnapshot s : many.getReplacedBlockSnapshots()) places.add(s.getPos());
-        } else {
+            for (BlockSnapshot s : many.getReplacedBlockSnapshots()) {
+                if (fromHand(pl, level.getBlockState(s.getPos()))) places.add(s.getPos());
+            }
+        } else if (fromHand(pl, e.getPlacedBlock())) {
             places.add(e.getPos());
+        }
+    }
+
+    /**
+     * Whether a block is what the player holds, in either hand: placed as it is, from the hand.
+     * By the block's own item, which a wall torch or a wall sign shares with the standing one.
+     */
+    private static boolean fromHand(Player pl, BlockState placed) {
+        Item item = placed.getBlock().asItem();
+        if (item == Items.AIR) return false;
+        for (InteractionHand hand : InteractionHand.values()) {
+            if (pl.getItemInHand(hand).is(item)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * A sapling (or a mushroom, a fungus) about to grow into a tree: forgotten, and the other
+     * saplings of a 2x2 tree with it, beside it at its level, still saplings as it fires.
+     */
+    private static void grows(BlockGrowFeatureEvent e) {
+        if (!(e.getLevel() instanceof ServerLevel level)) return;
+        Places places = of(level);
+        BlockPos at = e.getPos();
+        places.remove(at);
+        for (BlockPos n : BlockPos.betweenClosed(at.offset(-1, 0, -1), at.offset(1, 0, 1))) {
+            if (places.has(n) && level.getBlockState(n).is(BlockTags.SAPLINGS)) places.remove(n.immutable());
         }
     }
 

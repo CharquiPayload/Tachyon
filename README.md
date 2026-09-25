@@ -11,7 +11,7 @@ in the chat.
 One jar, in the server's `mods/` folder. Players join without installing
 anything, and no bot needs a Minecraft account or a game client of its own.
 
-**Early days (0.3.0).** It walks, follows, hunts, gathers materials, clears
+**Early days (0.4.0).** It walks, follows, hunts, gathers materials, clears
 areas and talks; it goes far, round what is in the way and through gates,
 bridging gaps and climbing walls with blocks it carries, and digging through
 when allowed; it fights with a sword and a bow, wears armor, eats, and tosses
@@ -87,8 +87,10 @@ logs", "I need seeds"), clear a box it was asked to clear, put something in its
 hand, put on or take off armor, eat, toss things (to you, too), change its trash
 list, tell how it is, look around, tell where and how it last died, tell what it may break on its own. Its brain's
 `clear` is for an area someone asked to have cleared, never to get a material,
-and it refuses a box that holds blocks players placed: then it says a person can
-order it with `/tachyon clear`. When something it was asked is
+and it refuses a box that holds blocks players placed, or, for a build older than
+the server's record of them, blocks players build with (planks, doors, glass,
+torches...) or logs that are no tree's: then it says a person can order it with
+`/tachyon clear`. When something it was asked is
 over (done, or given up), it says so, in its words. Each player can speak to bots
 a few times a minute (`per_minute`).
 
@@ -111,9 +113,10 @@ its owner is in the game.
 
 **Technical lines.** Players read no line of the mod's own but its notices and
 its commands' answers. With `verbose` on (off by default), its owner also gets,
-as they happen, the lines the server's log has about the bot, with coordinates:
-what it does by itself (`[tachyon] Ada backs off: 5 health, a zombie 3 blocks
-away`), the tools its brain calls and what they answered, its death as the log
+as they happen, the lines the server's log has about the bot, each with where
+it is (to a line that names no place, where the bot stands is added): what it does by
+itself (`[tachyon] Ada backs off: 5 health, a zombie 3 blocks away (at 12 64
+-30)`), the tools its brain calls and what they answered, its death as the log
 says it (`[tachyon] Ada died (Ada was slain by Zombie) and is back at 12 64
 -30`), an order's end. It is for finding out what went wrong.
 
@@ -136,8 +139,11 @@ the way, and told back once it is over.
   down at most, else as a tile beside it: "go to the chest" ends beside the chest,
   not on it; only with neither, as the tile over it (a dirt path's own cell, read
   off where a player stands on it). With building allowed, a tile in the air is
-  where it goes: it builds up to it. `come_here` goes to the tile the player stands
-  on, on a dirt path or farmland too.
+  where it goes (it builds up to it) if it could get off it again: onto a tile
+  beside it, or by a fall its health allows; else it is taken as the ground under
+  it, 24 blocks down at most (a tower to it would leave the bot on top, with no
+  way down). `come_here` goes to the ground under the player: the tile they stand
+  on (a dirt path or farmland too), or, jumping or flying, the floor under them.
 - **Far.** Each leg is the route a search finds, or the stretch of it that gets
   closest; the legs after the first aim at the place's column first, at any
   height, and only then at the tile (a player who said where they stood on a
@@ -157,9 +163,12 @@ the way, and told back once it is over.
   in and swims on.
 - **Stuck.** Six jumps in a row without getting on (a berry bush only slows it,
   and does not count), and the tile it could not get into is left out of its
-  searches for 90 s, so the next one finds another way; with no route from
-  there, it walks to a tile 2 to 5 blocks aside and searches again from it. Three
-  times, and the leg is over.
+  searches for 90 s (not built onto nor dug into either), so the next one finds
+  another way; with no route from there, it walks to a tile 2 to 5 blocks aside
+  and searches again from it. Three times, and the leg is over. The tile it
+  stands on is never left out of its own search, and a new order that finds no
+  way with those tiles left out is searched once more with them (whatever was
+  in the way may be gone); a search that fails with some left out says so.
 - **Building** (`build_to_move`, on). With no way on foot, it places a block under
   the next tile to cross a gap (straight on, never over water, which it swims), or
   under its feet at the top of a jump to climb, from a player's reach and as a
@@ -167,24 +176,33 @@ the way, and told back once it is over.
   cheap blocks it carries: dirt, grass blocks, cobblestone, stone, deepslate,
   andesite, diorite, granite, tuff, calcite, netherrack, blackstone, basalt, sand,
   gravel and planks (and the rest of those families, by the game's tags); carrying
-  none, it plans no building. The path finder charges a bridge block 23 ticks and a
+  none, it plans no building. Sand and gravel go only into towers: in a bridge,
+  with nothing under them, they fall. The path finder charges a bridge block 23 ticks and a
   tower block 28, against 4.6 for a step: it builds only where walking, swimming
   and going round do not get it there. It does not pick them up again.
   `build_while_following` (on) lets it build to keep up with whom it follows too.
-- **A hole.** Shut in on all four sides with no way out on foot and building off,
-  it climbs out on a tower under its own feet, 8 blocks at most, if it carries
-  blocks and there is no roof: the one block it places with `build_to_move` off.
+- **A hole.** Walled in on all four sides with no way out on foot and building
+  off, it climbs out on a tower under its own feet, 8 blocks at most, if it carries
+  blocks and there is no roof: the one time it builds with `build_to_move` off. On
+  top of a pillar, with air all round, it is not in a hole, and does not say it is.
 - **Digging through** (`break_to_advance`, off). With no way on foot, a route may
   go through blocks on its break list, which it digs (the head's block, then the
   feet's) with the best tool it carries, in the time the block takes: straight
-  on, on solid ground, never into lava. The list is what it may break on its own:
-  cobblestone, dirt, grass blocks and stone, to start with. Its owner or an
-  operator changes it (`/tachyon break <who> allow|forbid|default <block>`); its
-  brain reads it (`break_permissions`) and cannot change it. It is looked at again
-  on each block as it is dug, and it rules only what the bot breaks on its own to
-  make its way: what it is told to break (`clear`) never needed it. Whatever the
-  list says, it never digs a block a player placed ([Gathering](#gathering) says
-  how the server knows them): a player's build is broken only on a person's order.
+  on, on solid ground. Never into lava: not a block with lava over it or beside
+  it (it would pour in), and lava that comes into the way after all is gone round.
+  The list is what it may break on its own: cobblestone, dirt, grass blocks and
+  stone, to start with. Its owner or an operator changes it (`/tachyon break <who>
+  allow|forbid|default <block>`); its brain reads it (`break_permissions`) and
+  cannot change it. It is looked at again on each block as it is dug, and it rules
+  only what the bot breaks on its own to make its way: what it is told to break
+  (`clear`) never needed it. Whatever the list says, it never digs a piece of a
+  build: a block a player placed, or one that touches a block players build with or
+  one they placed ([Gathering](#gathering) says how the server knows them), so
+  planks allowed on its list open no wall of planks; a player's build is broken
+  only on a person's order. A block the server refuses to
+  break (a claim, a protection) is gone round at once. Only the walks of trips,
+  followers and jobs dig; a chase (a hunt, a kill, going out looking, backing off)
+  never stops to.
 
 ## Death, restarts and the night
 
@@ -361,15 +379,23 @@ the tool that makes them drop what they are (the fastest of those; with none tha
 speeds a block up, a hand that wears nothing, since a tool spends a use on any
 block), picks up what they drop, and stops once it carries as many more as it was
 told (16 when not told; 256 at most from its brain): of the item named, or, with
-none, of blocks broken. Asked for dirt, it takes grass blocks, podzol, mycelium
-and dirt paths too (they drop dirt), and counts the dirt; for cobblestone, stone;
-for cobbled deepslate, deepslate. Seeds come from cutting grass
-(`gather_seeds`, `/tachyon gather <who> seeds`): about one in eight plants.
+none (or with the block's own item named, as "3 stone" is), of blocks broken.
+Asked for dirt, it takes grass blocks, podzol, mycelium and dirt paths too (they
+drop dirt), and counts the dirt; for cobblestone, stone; for cobbled deepslate,
+deepslate. Seeds come from cutting grass (`gather_seeds`, `/tachyon gather <who>
+seeds`): about one in eight plants. Blocks that do not bring the count up (16 in a
+row, or 4 for each one asked when that is more) and it stops, saying so: what they
+drop is not what it counts.
 
 It takes what a player in its place would. **Only blocks in the open**: with a
-face to the air, that face under the sky or in its sight from where it stands;
-never a block seen through rock, and never ores (a search for them all around is
-the x-ray; they are mined). It looks 16 blocks each way, 4 down and 6 up, in the
+face to the air, that face under the open sky (the sky's full light reaches it:
+not a cave, not the floor of a house, though some light comes in by its door) or
+in its sight from where it stands; never a block seen through rock or walls, and
+never ores (a search for them all around is the x-ray; they are mined). A tree is
+seen by its crown (from a log, only logs and leaves up to the open sky): it chops a
+trunk from the bottom up, the logs inside the leaves too. It walks to a tile from
+which it sees the block it goes for, as a player stands to click it, and leaves
+that grew there in front of it it breaks in passing. It looks 16 blocks each way, 4 down and 6 up, in the
 loaded chunks; with none there, it **goes out looking** (legs of 48 blocks the way
 it was told or faces, turning right when three get it nowhere, 300 blocks or 3
 minutes at most, twice an errand), looking around as it walks.
@@ -381,18 +407,22 @@ build older than the mod, any block that touches a building block (planks,
 stairs, slabs, doors, wool, fences, walls, trapdoors, beds, signs, glass, bricks,
 torches, lanterns, chests, crafting tables, furnaces) or a block a player placed;
 and logs that are not a tree's (the logs joined to it must touch leaves that grew
-there and no building block: a log cabin is logs too). Only a person's
-`/tachyon clear` breaks a build. Nor does it take a block with nothing under it,
-2 blocks down at most, to catch what it drops: what falls into a gap is lost,
-and a bridge a bot built over one is the way back.
+there and no building block: a log cabin is logs too). A block placed is kept only
+when a player placed it from the hand as it is: bone meal that grows a tree, or a
+sapling that grows into one, is no build. Only a person's `/tachyon clear` breaks
+a build. Nor does it take a block with nothing under it, 3 blocks down at most, to
+catch what it drops (what falls into a gap is lost, and a bridge a bot built over
+one is the way back), unless it grew there: a tree's logs and leaves hang over the
+ground they grew from, and it chops a trunk from the bottom up.
 
 It stops when it has enough, when its backpack is full, when it carries no tool
 that makes those blocks drop anything, or when a search finds none; every way it
 ends says how many it got, and what it left alone and why: `gathered 16 dirt
 (broke 16 blocks)`, `broke 0 of 3 stone; I carry no tool that makes stone drop
-anything`, `broke 2 of 4 sand; I saw no more sand in the open: I looked 300
-blocks to the east; left alone 12 that players placed or built with`. Several
-bots gathering together share what is around, each taking the block it goes for.
+anything`, `broke 2 of 4 sand and picked up what they dropped; I saw no more sand
+in the open: I looked 300 blocks to the east; left alone 12 that players placed or
+built with`. Several bots gathering together share what is around, each taking the
+block it goes for.
 What it gathers is not its trash meanwhile (dirt is on the list). Its walks to the
 blocks go as every walk does ([Getting there](#getting-there)): with
 `break_to_advance` on they may dig through blocks on its break list, never one a
@@ -521,7 +551,7 @@ one.
 | `retreat_when_hurt` | Back off when badly hurt | Life | basic | owner, operators | `on` | Badly hurt (6 health or less, or poisoned) with something hostile at hand, it breaks off what it is doing and backs off, until it makes out nothing hostile within 24 blocks (a minute at most). ([Badly hurt](#badly-hurt)) |
 | `ignore_for_sleep` | Left out of sleeping | Night | basic | operators | `on` | The players skip the night without it: it does not count for the sleeping percentage, and no phantoms spawn because of it. |
 | `brain_lite` | Lite brain | Brain | advanced | owner, operators | `off` | Its brain is sent only the core tools, which a small local model chooses from better. ([The brain](#the-brain)) |
-| `notices` | Notices to its owner | Brain | basic | owner, operators | `brain` | It tells its owner what nobody asked about (how going back for its things went, a player hitting it, a full backpack, what it could not deal with, a death, an order given by a command that is over) in its own words, whispered to its owner alone (brain: a call to its model), in a fixed line (plain), or not at all (off). ([Talking to a bot](#talking-to-a-bot)) |
+| `notices` | Notices to its owner | Brain | basic | owner, operators | `brain` | It tells its owner what nobody asked about (how going back for its things went, a player hitting it, a full backpack, what it could not deal with, a death), and whoever gave it an order by a command how that order ended: in its own words, whispered to them alone (brain: a call to its model), in a fixed line (plain), or not at all (off). ([Talking to a bot](#talking-to-a-bot)) |
 | `verbose` | Technical lines | Brain | advanced | owner, operators | `off` | Its owner also gets the technical lines the server's log has about it (what it does by itself, with coordinates), for finding out what went wrong. When it is off, its owner hears only its notices. ([Talking to a bot](#talking-to-a-bot)) |
 | `dress_alone` | Put on better armor | Gear | basic | owner, operators | `on` | It puts on better armor it carries, by itself (it looks every 10 seconds). |
 | `trash_at_once` | Toss trash at once | Gear | advanced | owner, operators | `off` | It tosses its trash as soon as it picks it up. When it is off, it tosses it only when its backpack is full. ([Tossing](#tossing-and-trash)) |
@@ -677,7 +707,7 @@ work: 100 bots with iron swords among 30 zombies (all dead within 10 s) cost 3.1
 a tick over that minute. What a bot's abilities do in other entities' ticks (a hit
 taken, a pickup) is in the whole tick, not in the bots' share.
 
-Gathering, measured the same way (samples of 20 s, the 0.3.0 dev server):
+Gathering, as 0.4.0 was first built, measured the same way (samples of 20 s):
 
 | bots | doing | tick | the bots' share | its worst tick |
 |---|---|---|---|---|
@@ -686,20 +716,21 @@ Gathering, measured the same way (samples of 20 s, the 0.3.0 dev server):
 | 100 | gathering what is nowhere around, out looking over the world's own ground | 12–18 ms | 4.3–5.0 ms | 17–29 ms |
 
 A look around for blocks is a sweep of the chunk sections within 16 blocks, a
-section with none of the kinds skipped whole; a bot looks when what it knows of
-is spent (every half second at most, every 2 s while out looking, each on a tick
-of its own), and no more than 4 bots look in one tick. The searches of the 100
+section with none of the kinds skipped whole, and the nearest 1,024 blocks found
+weighed at most; a bot looks when what it knows of is spent (every half second at
+most, every 2 s while out looking, each on a tick of its own), and no more than 4
+bots look in one tick, those that waited longest first. The searches of the 100
 out looking took 6 to 10 ms each on their thread, 3 waiting at most. What was
 added to a bot standing idle (a look once a second for its feet inside a block) is
 a block read a second. A busy modpack leaves less room than a plain server:
 measure yours with `/tachyon stats` and `/tick query`.
 
-Getting there, as it is now, against 0.3.0 (the same 6-core VM, 100 bots told at
+Getting there in 0.4.0, as it was first built, against 0.3.0 (the same 6-core VM, 100 bots told at
 once, the bots' share from `/tachyon stats` in samples of 10 s, 20 s standing;
 another test server ran on the VM meanwhile, so a sample alone may be 0.6 ms off
 either way):
 
-| 100 bots | 0.3.0 | now |
+| 100 bots | 0.3.0 | 0.4.0 |
 |---|---|---|
 | standing (12 samples each, the builds taking turns) | 3.0–4.2 ms, 3.7 on average | 2.5–4.5 ms, 3.9 on average |
 | to a place 325 blocks off, over flat stone | all there in 60–70 s; 4.8 ms, 100 searches, 179,000 tiles | all there in 70 s; 4.6 ms, the same searches |
@@ -725,6 +756,26 @@ stone wall, 6.2–6.3 ms against 5.4–6.4 ms; over the canyon, 5.6–6.0 ms aga
 in samples of 20 s (6.2–7.7 ms alone, in another hour).
 A search that may dig takes, with its snapshot, the arrays of the blocks players
 placed in its chunks (the level's own, not copied): a lookup per chunk, at most 400.
+
+0.4.0 as released, after its review, against 0.4.0 as it was first built (100 bots,
+the builds taking turns in the same hour, two runs each; the bots' share from
+`/tachyon stats` in samples of 20 s, the mean of each sample; the whole tick from
+`/tick query`, 10–16 ms throughout):
+
+| 100 bots | first built | released |
+|---|---|---|
+| standing | 4.3, 4.9 ms | 4.8, 4.8 ms |
+| gathering 64 dirt each on a grass field | 5.9–7.0 ms, worst tick 19–26 ms | 5.5–6.8 ms, worst tick 17–30 ms |
+| gathering cobblestone in a cave inside a block of stone (a look finds thousands of blocks, nearly all buried) | 8.1–11.8 ms, worst tick 31–45 ms | 7.6–8.5 ms, worst tick 19–31 ms |
+| through a stone wall, `break_to_advance` on | 5.7, 5.7 ms | 5.5, 5.5 ms (5.2 with every block looked at on each tick it is dug) |
+| over a canyon, 16 cobblestone each | 4.9, 5.0 ms | 4.8, 5.2 ms |
+| told to go 10,000 blocks off, all in one tick: a snapshot each | 1.0–1.7 ms each, 12–44 ms at most | 0.01–0.04 ms each, 0.15 ms at most |
+
+A snapshot's rings, out from the bot, stop at the first that holds no loaded chunk
+(nothing beyond it could be reached), so a far trip reads only the chunks around
+the bot; before, it walked rings out to the destination's distance on every leg.
+A look weighs the nearest 1,024 blocks a sweep found at most, which under a hill of
+stone was every one of thousands, six blocks read round each.
 
 ## Where to use it
 

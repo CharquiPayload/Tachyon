@@ -88,8 +88,12 @@ public final class Leg {
             return out != null ? out : new Found(r, Kind.WALK, null);
         }
         // Able to build, a tile in the air is where it goes (it builds up to it): landing it
-        // would turn "climb up there" into "stay down here". Else, the ground under it.
-        Route.Point landed = op.canBuild() ? asked : Landing.land(m, asked);
+        // would turn "climb up there" into "stay down here". Not one it could not get off
+        // again (Landing.leavable): that is the ground under it, however far down. Else, the
+        // ground under it, a few blocks down at most.
+        Route.Point landed = !op.canBuild() ? Landing.land(m, asked)
+                : Landing.leavable(m, asked, op.maxFall()) ? asked
+                : Landing.land(m, asked, Landing.DEEP);
         Route.Result r = null;
         if (landed != null) {
             r = Route.search(m, a.here(), landed, left(op, until));

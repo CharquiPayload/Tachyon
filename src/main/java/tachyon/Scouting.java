@@ -5,23 +5,23 @@ import net.minecraft.core.Direction;
 import tachyon.path.Route;
 
 /**
- * Going out looking for something none of which is in sight, as Masurium's bots did and
- * {@link Hunt} does for prey: in legs of {@link #LEG} blocks one way (the way it was told,
- * or the way it faces), any height ("X and Z first, Y up close"), each searched from where
- * the last one ended; three legs in a row that get it nowhere (sea, cliff, no way) and it
- * turns right; for {@link #BLOCKS} blocks or {@link #TICKS 3 minutes} at most, and
- * {@link #SEARCHES twice} an errand at most. The job that owns it looks around as it walks
- * and stops it once something is in sight. Hunt keeps a copy of its own, from before this
- * was made; the numbers are the same.
+ * Going out looking for something none of which is in sight, as Masurium's bots did: a
+ * hunt for prey ({@link Hunt}), a gather for blocks ({@link Gather}). In legs of
+ * {@link #LEG} blocks one way (the way it was told, or the way it faces), any height ("X and
+ * Z first, Y up close"), each searched from where the last one ended; three legs in a row
+ * that get it nowhere (sea, cliff, no way) and it turns right, up to four times (all four
+ * ways and back to the first), and then gives up; for {@link #BLOCKS} blocks or
+ * {@link #TICKS 3 minutes} at most, and {@link #SEARCHES twice} an errand at most. The job
+ * that owns it looks around as it walks and stops it once something is in sight.
  *
  * <p>A search is a walk the legs plan (a route search on a thread of its own, at most once
  * a second): nothing heavy runs on the server's thread.
  */
-final class Legs {
+final class Scouting {
 
     /** A leg's length, how far and how long a search goes at most, and how many searches an errand has. */
     static final int LEG = 48, BLOCKS = 300, TICKS = 20 * 180, SEARCHES = 2;
-    /** A leg that gets it this little further counts as none; three of them, it turns; four turns, it gives up. */
+    /** A leg that gets it this little further counts as none; three of them, it turns; a fifth turn, it gives up instead. */
     private static final double PROGRESS = 2.0;
     private static final int STUCK = 3, TURNS_MAX = 4;
 

@@ -172,7 +172,7 @@ final class Retreating implements Ability {
                     + Threats.blocks(b.distanceTo(from)) + " away");
         }
         if (!Settings.bool(p, RETREAT)) {
-            end(p, r, "its retreat_when_hurt was turned off");
+            end(p, r, Settings.named(RETREAT) + " was turned off");
             return;
         }
         if (Threats.due(p, now) || !r.from.isAlive() || r.from.level() != b.level()) {

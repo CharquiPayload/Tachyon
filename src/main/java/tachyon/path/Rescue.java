@@ -31,13 +31,16 @@ public final class Rescue {
     }
 
     /**
-     * Whether walking does not get it out: no standable tile beside it, at its level or a
-     * step up (what it climbs without placing anything).
+     * Whether it is shut in: on each side a wall (a block at the feet or at the head) and no
+     * standable tile, at its level or a step up (what it climbs without placing anything).
+     * A side open to the air is no wall: on top of its own tower, with nothing beside it, a
+     * bot is on a pillar, not in a hole, and "trapped in a hole" was not true.
      */
     public static boolean inAHole(World m, Route.Point me) {
         for (int[] s : SIDES) {
             int x = me.x() + s[0], z = me.z() + s[1];
             if (m.canStand(x, me.y(), z) || m.canStand(x, me.y() + 1, z)) return false;
+            if (!m.solid(x, me.y(), z) && !m.solid(x, me.y() + 1, z)) return false;
         }
         return true;
     }

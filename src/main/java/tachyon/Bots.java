@@ -31,6 +31,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
@@ -141,6 +142,12 @@ public final class Bots {
     // what a bot has.
     /** An intermediate point counts as reached within this; the last one, within more. */
     private static final double NEAR = 0.85, NEAR_END = 1.4;
+    /**
+     * The last point's slack for a walk onto an item on the ground, Masurium's: a player picks
+     * up only what its box almost touches, and with the usual slack a walk ended beside the
+     * item and never took it (see {@link #arriveWithin}).
+     */
+    static final double ON_ITEM = 0.4;
     /** Every this many ticks, less progress than this is being stuck: it jumps. */
     private static final int STUCK_TICKS = 20;
     private static final double MIN_PROGRESS = 0.35;
@@ -239,15 +246,11 @@ public final class Bots {
         double doorSide;
         /** The last point's slack in this walk: a job that must stand right on it asks for less (see arriveWithin). */
         double nearEnd = NEAR_END;
-        /** Whether the route it walks was searched with building, or digging, allowed: its steps may place or dig. */
+        /**
+         * Whether the route it walks was searched with building, or digging, allowed: its steps
+         * may place or dig (Scaffolding and Tunnelling keep how a block goes, in their slots).
+         */
         boolean walkBuilds, walkBreaks;
-        /** A tower going up: where its block goes, and the ticks since it jumped (see Scaffolding). */
-        BlockPos towerAt;
-        int towerTicks;
-        /** The block it digs through, the ticks it has been at it, and the face struck (see Tunnelling). */
-        BlockPos digging;
-        int digTicks;
-        Direction digFace;
         /** The last tick the walk went to a block (placing, digging): time spent on a block is not being stuck. */
         long workedAt = -STUCK_TICKS;
         /** Where its legs got stuck lately: not stood on by its searches for 90 s (see StuckSpots). */
@@ -312,6 +315,15 @@ public final class Bots {
                 slots.put(key, v);
             }
             return key.cast(v);
+        }
+
+        /**
+         * An ability's state for this bot if it was made, else null: for what only lets go of
+         * one (a walk stopped lets go of a tower half built), which must not make one for every
+         * bot that never built.
+         */
+        <T> T slotIfMade(Class<T> key) {
+            return key.cast(slots.get(key));
         }
     }
 
@@ -1531,7 +1543,8 @@ public final class Bots {
 
     /**
      * The walk's slack at the last point of the route just planned: {@link #NEAR_END}
-     * unless a job asks for less (an item to stand on) or more. Asked after {@code plan},
+     * unless a job asks for less ({@link #ON_ITEM}: the walks of a hunt, a gather and a trip
+     * back for its things onto what lies on the ground) or more. Asked after {@code plan},
      * which sets it back.
      */
     static void arriveWithin(Bot p, double slack) {
@@ -1566,6 +1579,12 @@ public final class Bots {
             long t0 = System.currentTimeMillis();
             Leg.Found f = find.apply(world, options);
             STATS.search(System.currentTimeMillis() - t0, f.route().looked());
+            if (!f.hasRoute() && world.vetoes()) {
+                // Its words say what was left out, so that "no route" is not taken for the
+                // whole truth: the way may be through a tile it gave up on a moment ago.
+                f = new Leg.Found(new Route.Result(null, f.route().reason() + " (leaving out " + world.vetoedCount()
+                        + " tile(s) where I got stuck lately)", f.route().looked()), f.kind(), f.destination());
+            }
             return f;
         });
         p.doing = doing;
@@ -1591,9 +1610,18 @@ public final class Bots {
         boolean inWater = body.isInWater();
         Route.Point asked = new Route.Point(t.asked.getX(), t.asked.getY(), t.asked.getZ());
         Route.Point to = t.destination;
+        boolean newOrder = t.legs == 0 && !afterStuck;
         send(p, p.target, op, (world, options) -> {
             Leg.Ask a = new Leg.Ask(whereAmI(world, at), at.x, at.z, inWater, options, blocks, afterStuck);
-            return to == null ? Leg.first(world, a, asked) : Leg.next(world, a, to);
+            Leg.Found f = to == null ? Leg.first(world, a, asked) : Leg.next(world, a, to);
+            if (!f.hasRoute() && newOrder && world.vetoes()) {
+                // A new order finds no way with the tiles it got stuck on lately left out: the
+                // obstacle there may be gone (a player cleared it, the mob moved off), and the
+                // order was given knowing that. Once more, without them.
+                world.vetoing(Set.of());
+                f = to == null ? Leg.first(world, a, asked) : Leg.next(world, a, to);
+            }
+            return f;
         }, t.first() ? "going to " + t.asked.toShortString()
                 : String.format(Locale.ROOT, "going to %s: %.0f blocks to go", t.asked.toShortString(), t.left(at)));
     }
@@ -1672,7 +1700,8 @@ public final class Bots {
      * follower walks as a stutter. The tile under the centre first, then those under the
      * box's corners; one up (the feet are inside a partial block's cell: a path, a slab)
      * and one down (in a jump, or pushed off an edge). A tile it got stuck on lately is
-     * where it stands all the same.
+     * where it stands all the same, and the search that starts there does not veto it
+     * ({@link SnapshotWorld#startingAt}). On the search's thread.
      */
     private static Route.Point whereAmI(SnapshotWorld world, Vec3 at) {
         int y0 = (int) Math.floor(at.y);
@@ -1681,12 +1710,17 @@ public final class Bots {
             for (double dx : offsets) {
                 for (double dz : offsets) {
                     int x = (int) Math.floor(at.x + dx), z = (int) Math.floor(at.z + dz);
-                    if (world.canStandWithoutVeto(x, y, z)) return new Route.Point(x, y, z);
+                    if (world.canStandWithoutVeto(x, y, z)) {
+                        world.startingAt(x, y, z);
+                        return new Route.Point(x, y, z);
+                    }
                 }
             }
         }
         // None: the tile under the centre, so the search says what is really wrong.
-        return new Route.Point((int) Math.floor(at.x), y0, (int) Math.floor(at.z));
+        Route.Point here = new Route.Point((int) Math.floor(at.x), y0, (int) Math.floor(at.z));
+        world.startingAt(here.x(), here.y(), here.z());
+        return here;
     }
 
     /** The first tile one can stand on under {@code at} (24 down at most), else {@code at}. */
@@ -1827,7 +1861,7 @@ public final class Bots {
      */
     static void blocked(Bot p, String why) {
         if (p.path == null) return;
-        p.towerAt = null;
+        Scaffolding.stop(p);
         Tunnelling.abort(p);
         replan(p, why);
     }
@@ -1847,7 +1881,7 @@ public final class Bots {
         if (p.pending != null) p.pending.cancel(true);
         p.pending = null;
         p.path = null;
-        p.towerAt = null;
+        Scaffolding.stop(p);
         Tunnelling.abort(p);
         release(p.body);
         closeOnStop(p);
@@ -1925,6 +1959,12 @@ public final class Bots {
         closeIfDue(p);
         if (openIfNeeded(p, goal)) {
             release(b);
+            return;
+        }
+        if (p.walkBreaks && Tunnelling.lavaAt(b.level(), goal)) {
+            // Lava that came into a tunnel after the search (a block dug next to a pocket the
+            // search did not see): the way is searched again, without that tile.
+            blocked(p, "lava came into the way at " + goal.x() + " " + goal.y() + " " + goal.z());
             return;
         }
         if (p.walkBuilds && Scaffolding.step(p, goal) || p.walkBreaks && Tunnelling.step(p, goal)) {
@@ -2024,6 +2064,28 @@ public final class Bots {
      */
     static BlockPos standingOn(Entity e) {
         return new BlockPos(e.getBlockX(), floorY(e), e.getBlockZ());
+    }
+
+    /** How far under a player the ground is looked for, for "come here" (a player flying, or falling). */
+    private static final int GROUND_DOWN = 64;
+
+    /**
+     * The tile under a player where one can stand: the tile they stand on, or, jumping,
+     * falling or flying, the first one under it with a floor (a block with a box, or water),
+     * {@value #GROUND_DOWN} blocks down at most; their own tile when there is none. "Come here"
+     * said by a player in the air is "come to where I am", not "build up to my feet": aimed
+     * at the air tile, a bot carrying blocks built an 11-block pillar under its flying owner.
+     * On the server's thread: a few block reads.
+     */
+    static BlockPos groundUnder(Entity e) {
+        BlockPos at = standingOn(e);
+        var level = e.level();
+        for (int down = 0; down <= GROUND_DOWN && at.getY() - down > level.getMinBuildHeight(); down++) {
+            BlockPos feet = at.below(down), under = feet.below();
+            if (level.getFluidState(feet).is(FluidTags.WATER)) return feet;
+            if (!level.getBlockState(under).getCollisionShape(level, under).isEmpty()) return feet;
+        }
+        return at;
     }
 
     private static int floorY(Entity b) {

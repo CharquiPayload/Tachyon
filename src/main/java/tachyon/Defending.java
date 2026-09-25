@@ -323,7 +323,7 @@ final class Defending implements Ability {
         if (a.level() != b.level()) return "it is gone";
         if (b.distanceToSqr(a) > FAR * FAR) return "it is more than " + (int) FAR + " blocks away";
         if (now - f.lastHit > PATIENCE) return "it has not hurt it for " + PATIENCE / 20 + " s";
-        if (a instanceof Player && !foe(p, a)) return "players are not to be fought (defend_from_players)";
+        if (a instanceof Player && !foe(p, a)) return "players are not to be fought (" + Settings.named(PLAYERS) + " is off)";
         return null;
     }
 

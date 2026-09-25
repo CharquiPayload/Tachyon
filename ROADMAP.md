@@ -37,14 +37,15 @@ do, rebuilt to run on the server, and adds things only a server can do.
     archers, backs off when badly hurt, comes up for air, stays afloat, digs
     itself out when buried and eats when hungry. It sees only what a player
     in its place could see.
-- **Polish.**
+- **0.4.0: polish.**
   - `gather` ("get me some dirt", "chop 20 logs", seeds from grass): it breaks
     only that kind of block, in the open, and picks up what drops. When none
     is near, it goes out looking.
   - Builds are safe. The server keeps the blocks players placed, and a bot
     never gathers them or what they touch, nor digs through them to get
-    somewhere. Its brain's `clear` refuses a box that holds them; a person's
-    `/tachyon clear` still works.
+    somewhere. A build from before the mod is known by what it is made of
+    (planks, doors, glass, a log cabin). Its brain's `clear` refuses a box that
+    holds a build; a person's `/tachyon clear` still works.
   - A `verbose` setting: technical lines for the owner only when asked for.
     Deaths and orders given by a command reach the owner through the notices.
   - A spawn point set on a slab or a dirt path works: the bot tries one block
@@ -52,7 +53,7 @@ do, rebuilt to run on the server, and adds things only a server can do.
   - The menu reads better: on and off, full sentences, labels in refusals,
     and which default Q goes back to.
   - A bot with gravel fallen at its feet digs itself out.
-- **Moving better.**
+- **0.4.0: moving better.**
   - Trips of hundreds of blocks, a leg at a time, judged as a whole: it stops
     only when three legs in a row get it no closer, and says where, why and
     with what numbers.
@@ -63,6 +64,9 @@ do, rebuilt to run on the server, and adds things only a server can do.
   - Climbing out of a hole; swimming straight across open water.
   - A tile it got stuck on is left out of its searches for a while, and it
     walks a short detour when there is no way from where it stands.
+  - Never into lava when digging through, never a tower it cannot get down
+    from, and "come here" from a player in the air goes to the ground under
+    them.
 
 ## In progress
 

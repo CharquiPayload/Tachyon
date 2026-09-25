@@ -1,7 +1,6 @@
 package tachyon;
 
 import net.minecraft.commands.arguments.EntityAnchorArgument;
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
@@ -82,11 +81,6 @@ final class Hunt extends Job {
     static final float HEALTH_MIN = 6.0f;
     /** How many a hunt from its brain kills at most, and when it is not told how many: "hunt cows" is not every cow. */
     static final int COUNT_MAX = 8;
-    /** Looking for prey out of sight: legs this long, this far and this long at most, this many times an errand. */
-    private static final int LEG = 48, SEARCH_BLOCKS = 300, SEARCH_TICKS = 20 * 180, SEARCHES = 2;
-    /** Legs in a row that get it this little further count as none; three of them, it turns; five turns, it gives up. */
-    private static final double LEG_PROGRESS = 2.0;
-    private static final int LEGS_STUCK = 3, TURNS_MAX = 4;
     /** With no count, it waits this long for more to come in sight before it is done. */
     private static final int NO_PREY_TICKS = 600;
 
@@ -118,12 +112,8 @@ final class Hunt extends Job {
     private boolean awaitingItem;
     private final Set<UUID> leftOnGround = new HashSet<>();
 
-    /** Out looking for prey: which way, from where, how far it got, since when, and how it goes. */
-    private boolean searching;
-    private int searches, legsStuck, turns;
-    private Direction heading;
-    private double originX, originZ, bestProgress, walkedSearching;
-    private long searchStarted;
+    /** Out looking for prey none of which is in sight (see Scouting). */
+    private final Scouting scouting = new Scouting();
     private long noPreySince = -1;
 
     /**
@@ -160,7 +150,7 @@ final class Hunt extends Job {
     @Override
     String status() {
         String s = verb() + " " + prey.words() + ": " + counted() + " killed";
-        if (searching) s += ", looking for more to the " + heading.getName() + " (" + Math.round(walkedSearching) + " blocks out)";
+        if (scouting.out()) s += ", looking for more " + scouting.where();
         else if (loot > 0 && item != null) s += ", picking up what fell";
         return s;
     }
@@ -198,9 +188,9 @@ final class Hunt extends Job {
             boolean far = due(p, now, FAR_EVERY);
             target = choose(p, now, far);
             // None near: the look out to 128 decides whether to go looking, and it comes every 2 s.
-            if (target == null) return searching || far ? lookFurther(p, now) : true;
-            if (searching) {
-                searching = false;
+            if (target == null) return scouting.out() || far ? lookFurther(p, now) : true;
+            if (scouting.out()) {
+                scouting.found();
                 Bots.halt(p, status());
             }
             noPreySince = -1;
@@ -248,27 +238,21 @@ final class Hunt extends Job {
     }
 
     /**
-     * None in sight: it goes out looking (twice an errand at most), or, with no count, waits
-     * half a minute for more to show up; else it is done, saying how many and how far it
-     * looked. @return false once it is done
+     * None in sight: it goes out looking (twice an errand at most, see {@link Scouting}), or,
+     * with no count, waits half a minute for more to show up; else it is done, saying how
+     * many and how far it looked. @return false once it is done
      */
     private boolean lookFurther(Bots.Bot p, long now) {
-        BotPlayer b = p.body;
-        if (!searching && searches < SEARCHES) {
-            searching = true;
-            searches++;
+        if (!scouting.out() && scouting.begin(p, now, toward)) {
             letGo.clear();                   // from elsewhere, a way to them may be found
-            heading = searches == 1 && toward != null ? toward : b.getDirection();
-            originX = b.getX();
-            originZ = b.getZ();
-            bestProgress = 0;
-            walkedSearching = 0;
-            legsStuck = 0;
-            turns = 0;
-            searchStarted = now;
             Bots.halt(p, status());
         }
-        if (searching) return searchLeg(p, now);
+        if (scouting.out()) {
+            String end = scouting.step(p, now, status());
+            if (end == null) return true;
+            Bots.halt(p, done() + "; I saw no more " + prey.words() + ": " + end);
+            return false;
+        }
         if (wanted == 0) {
             if (noPreySince < 0) noPreySince = now;
             if (now - noPreySince < NO_PREY_TICKS) return true;
@@ -277,52 +261,6 @@ final class Hunt extends Job {
         }
         Bots.halt(p, done() + "; I see no more within " + (int) VIEW);
         return false;
-    }
-
-    /**
-     * Out looking: legs of {@link #LEG} blocks the way it heads, any height ("X and Z first,
-     * Y up close"), each searched from where the last one ended. Three that get it nowhere
-     * (sea, cliff, no way) and it turns right. @return false once it gives up, saying why
-     */
-    private boolean searchLeg(Bots.Bot p, long now) {
-        BotPlayer b = p.body;
-        double progress = Math.max(0, (b.getX() - originX) * heading.getStepX() + (b.getZ() - originZ) * heading.getStepZ());
-        walkedSearching = Math.max(walkedSearching, progress);
-        if (now - searchStarted > SEARCH_TICKS) {
-            searching = false;
-            Bots.halt(p, done() + "; I looked for more for 3 minutes (" + Math.round(walkedSearching) + " blocks to the "
-                    + heading.getName() + ") and saw none");
-            return false;
-        }
-        if (p.path != null || p.pending != null) return true;         // on the way
-        if (progress >= SEARCH_BLOCKS) {
-            searching = false;
-            Bots.halt(p, done() + "; I looked for more " + Math.round(progress) + " blocks to the " + heading.getName()
-                    + " and saw none");
-            return false;
-        }
-        if (progress < bestProgress + LEG_PROGRESS && now - searchStarted > LOOK_EVERY) {
-            if (++legsStuck >= LEGS_STUCK) {
-                if (++turns > TURNS_MAX) {
-                    searching = false;
-                    Bots.halt(p, done() + "; I looked for more on all four sides and found neither a way nor prey");
-                    return false;
-                }
-                heading = heading.getClockWise();
-                originX = b.getX();
-                originZ = b.getZ();
-                bestProgress = 0;
-                legsStuck = 0;
-            }
-        } else {
-            bestProgress = progress;
-            legsStuck = 0;
-        }
-        if (now - p.plannedAt < Bots.REPLAN_TICKS) return true;
-        p.plannedAt = now;
-        int ox = b.getBlockX() + heading.getStepX() * LEG, oz = b.getBlockZ() + heading.getStepZ() * LEG;
-        Bots.plan(p, new BlockPos(ox, b.getBlockY(), oz), world -> Route.Meta.onlyXZ(ox, oz), chase(b), status());
-        return true;
     }
 
     @Override
@@ -380,13 +318,14 @@ final class Hunt extends Job {
 
     /**
      * How a chase searches: partial routes (a stretch that gets closer is walked, and the
-     * rest searched from its end), and a fall as long as its health allows, as Masurium's
-     * safeFall: 3 blocks, and a block more for every 4 health, 12 at most. A fall past 3
-     * costs a point of health a block, and a hunter with full health takes 8.
+     * rest searched from its end), and a fall as long as its health allows
+     * ({@link Bots#safeFall}, Masurium's). Never digging, whatever its break_to_advance says:
+     * a chase is after something that moves (or, backing off and going out looking, a way
+     * anywhere), and 40 ticks a block dug is no way to catch up; the reflexes that walk this
+     * way (backing off, answering an archer) must not stop to dig either.
      */
     static Route.Options chase(BotPlayer b) {
-        int fall = Math.max(3, Math.min(12, 3 + (int) Math.floor(b.getHealth()) / 4));
-        return new Route.Options(fall, Route.Options.byDefault().maxNodes(), false, true);
+        return new Route.Options(Bots.safeFall(b.getHealth()), Route.Options.byDefault().maxNodes(), false, true);
     }
 
     /** Within a player's reach, and in sight: what a click would hit. */
@@ -511,6 +450,7 @@ final class Hunt extends Job {
             p.plannedAt = now;
             awaitingItem = true;
             Bots.plan(p, item.blockPosition(), 1.0, chase(b), status());
+            Bots.arriveWithin(p, Bots.ON_ITEM);
         }
         return true;
     }

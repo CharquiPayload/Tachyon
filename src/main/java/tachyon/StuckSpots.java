@@ -11,8 +11,8 @@ import java.util.Set;
 
 /**
  * The tiles a bot's legs failed to get into lately, Masurium's stuck spots: for
- * {@value #LASTS_TICKS} ticks (90 s) no search of that bot stands on them, except on the
- * tile it starts from.
+ * {@value #LASTS_TICKS} ticks (90 s) no search of that bot stands on them, builds onto them
+ * or digs into them, except the tile it starts from ({@link SnapshotWorld#startingAt}).
  *
  * <p>Searching again from the same place used to find the same route: to the path finder
  * that tile was still one to stand on, though the body had just jumped six times without
@@ -57,10 +57,5 @@ final class StuckSpots {
         if (until.isEmpty() || !in.equals(level)) return Set.of();
         until.values().removeIf(t -> t <= now);
         return until.isEmpty() ? Set.of() : Set.copyOf(until.keySet());
-    }
-
-    /** How many are vetoed (expired ones may be counted until the next look). */
-    int size() {
-        return until.size();
     }
 }

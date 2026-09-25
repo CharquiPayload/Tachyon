@@ -267,7 +267,8 @@ final class Fighting implements Ability {
     private static String players(Bots.Bot p, String words) {
         Player pl = p.body.getServer().getPlayerList().getPlayerByName(words.trim());
         if (pl == null || Settings.bool(p, HUNT_PLAYERS)) return null;
-        return words.trim() + " is a player: I fight players only when the operators turn on hunt_players";
+        return words.trim() + " is a player: I fight players only when the operators turn on "
+                + Settings.named(HUNT_PLAYERS);
     }
 
     @Override
@@ -330,7 +331,8 @@ final class Fighting implements Ability {
         List<Bots.Bot> them = Bots.find(c);
         Holder.Reference<EntityType<?>> mob = ResourceArgument.getEntityType(c, "mob");
         if (mob.value() == EntityType.PLAYER) {
-            return Bots.fail(c.getSource(), "players are prey only by their name, through the brain's kill, with hunt_players");
+            return Bots.fail(c.getSource(), "players are prey only by their name, through the brain's kill, with "
+                    + Settings.named(HUNT_PLAYERS) + " on");
         }
         Prey prey = Prey.of(mob.value());
         Bots.Order by = Bots.order(c.getSource(), them);

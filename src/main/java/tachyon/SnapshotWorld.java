@@ -17,6 +17,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -37,9 +38,10 @@ import java.util.Set;
  * <p>What is solid, a floor, a door or a danger is decided as Masurium's client bots
  * decide it. Two things of the bot's own go with a snapshot, copied as it is taken, so the
  * search thread reads them without touching the bot: the tiles it got stuck on lately
- * ({@link #vetoing}: not stood on, except where it stands now), and the blocks it may break
- * on its own to get through ({@link #breaking}: its break list, for a route that digs), with
- * the blocks players placed in its chunks, which it never digs ({@link #sparing}).
+ * ({@link #vetoing}: not stood on, except the tile the search starts from, see
+ * {@link #startingAt}), and the blocks it may break on its own to get through
+ * ({@link #breaking}: its break list, for a route that digs), with the blocks players placed
+ * in its chunks, which it never digs ({@link #sparing}).
  */
 final class SnapshotWorld implements World, BlockGetter {
 
@@ -51,10 +53,15 @@ final class SnapshotWorld implements World, BlockGetter {
     private final BlockPos.MutableBlockPos aux = new BlockPos.MutableBlockPos();
     /** Tiles not to stand on (where the bot got stuck lately): {@link BlockPos#asLong} of each. */
     private Set<Long> vetoed = Set.of();
+    /** The tile the search starts from ({@link BlockPos#asLong}), never vetoed: see {@link #startingAt}. */
+    private long start = Long.MIN_VALUE;
     /** The blocks it may break on its own to get through; none unless a route may dig. */
     private Set<Block> mayBreak = Set.of();
     /** The blocks players placed, by chunk, sorted ({@link PlacedBlocks.Places#inChunk}): never dug through. */
     private Map<Long, long[]> placed = Map.of();
+    /** What {@link #breakable} answered for each block asked, and whether each kind of block is one players build with. */
+    private final Map<Long, Boolean> breakables = new HashMap<>();
+    private final Map<BlockState, Boolean> building = new HashMap<>();
 
     private SnapshotWorld(Map<Long, LevelChunk> chunks, int minY, int height) {
         this.chunks = chunks;
@@ -68,6 +75,13 @@ final class SnapshotWorld implements World, BlockGetter {
      * outward from {@code a}'s chunk (the bot's): taken row by row from a corner, a box
      * bigger than that left out the chunks the bot stood in, which read as bedrock, and
      * every search failed at its start. A longer trip is searched a stretch at a time.
+     *
+     * <p>Each ring is walked only where it lies in the box, and the rings stop at the first
+     * one with no loaded chunk in it: every way from the bot to what lies beyond it crosses
+     * it, and it reads as rock, so nothing beyond could be reached. A trip 29,000 blocks off
+     * once walked rings all the way out to the destination's distance, 19 ms on the
+     * server's thread for each of its legs; now it costs what the loaded chunks between
+     * cost, a few hundred lookups at most.
      */
     static SnapshotWorld around(ServerLevel level, BlockPos a, BlockPos b, int margin, int maxChunks) {
         int x0 = (Math.min(a.getX(), b.getX()) - margin) >> 4, x1 = (Math.max(a.getX(), b.getX()) + margin) >> 4;
@@ -75,24 +89,28 @@ final class SnapshotWorld implements World, BlockGetter {
         Map<Long, LevelChunk> found = new HashMap<>();
         int ax = a.getX() >> 4, az = a.getZ() >> 4;
         int rings = Math.max(Math.max(ax - x0, x1 - ax), Math.max(az - z0, z1 - az));
-        take(level, found, ax, az, x0, x1, z0, z1);
-        // Each ring is walked round its edge only: the chunks inside it are taken already.
+        take(level, found, ax, az);
         for (int ring = 1; ring <= rings && found.size() < maxChunks; ring++) {
-            for (int i = -ring; i <= ring && found.size() < maxChunks; i++) {
-                take(level, found, ax + i, az - ring, x0, x1, z0, z1);
-                take(level, found, ax + i, az + ring, x0, x1, z0, z1);
+            int before = found.size();
+            // Its rows north and south, then its columns west and east without their
+            // corners (the rows have them): each clipped to the box.
+            int from = Math.max(ax - ring, x0), to = Math.min(ax + ring, x1);
+            for (int cz : new int[]{az - ring, az + ring}) {
+                if (cz < z0 || cz > z1) continue;
+                for (int cx = from; cx <= to && found.size() < maxChunks; cx++) take(level, found, cx, cz);
             }
-            for (int i = -ring + 1; i < ring && found.size() < maxChunks; i++) {
-                take(level, found, ax - ring, az + i, x0, x1, z0, z1);
-                take(level, found, ax + ring, az + i, x0, x1, z0, z1);
+            int zFrom = Math.max(az - ring + 1, z0), zTo = Math.min(az + ring - 1, z1);
+            for (int cx : new int[]{ax - ring, ax + ring}) {
+                if (cx < x0 || cx > x1) continue;
+                for (int cz = zFrom; cz <= zTo && found.size() < maxChunks; cz++) take(level, found, cx, cz);
             }
+            if (found.size() == before) break;
         }
         return new SnapshotWorld(found, level.getMinBuildHeight(), level.getHeight());
     }
 
-    /** A chunk of the box, if loaded; none outside the box. */
-    private static void take(ServerLevel level, Map<Long, LevelChunk> found, int cx, int cz, int x0, int x1, int z0, int z1) {
-        if (cx < x0 || cx > x1 || cz < z0 || cz > z1) return;
+    /** A chunk, if loaded. */
+    private static void take(ServerLevel level, Map<Long, LevelChunk> found, int cx, int cz) {
         LevelChunk chunk = level.getChunkSource().getChunkNow(cx, cz);
         if (chunk != null) found.put(ChunkPos.asLong(cx, cz), chunk);
     }
@@ -104,6 +122,26 @@ final class SnapshotWorld implements World, BlockGetter {
     SnapshotWorld vetoing(Set<Long> tiles) {
         this.vetoed = tiles;
         return this;
+    }
+
+    /** Whether any tile is vetoed now: a search that failed with some may be tried without them. */
+    boolean vetoes() {
+        return !vetoed.isEmpty();
+    }
+
+    /** How many tiles are vetoed, for the words of a search that failed with them. */
+    int vetoedCount() {
+        return vetoed.size();
+    }
+
+    /**
+     * The tile the search starts from, on the search's thread, before it runs: never vetoed,
+     * though the bot got stuck there. The body is on it: vetoing it left the bot unable to
+     * start any search for 90 s ("where I am is not a spot where one can stand"), and a crowd
+     * pushes bots back onto the very tiles they gave up on.
+     */
+    void startingAt(int x, int y, int z) {
+        start = BlockPos.asLong(x, y, z);
     }
 
     /**
@@ -208,13 +246,21 @@ final class SnapshotWorld implements World, BlockGetter {
      */
     @Override
     public boolean canStand(int x, int y, int z) {
-        if (!vetoed.isEmpty() && vetoed.contains(BlockPos.asLong(x, y, z))) return false;
+        if (vetoed(x, y, z)) return false;
         return canStandWithoutVeto(x, y, z);
     }
 
+    /** A tile it got stuck on lately, unless the search starts there. */
+    @Override
+    public boolean vetoed(int x, int y, int z) {
+        if (vetoed.isEmpty()) return false;
+        long at = BlockPos.asLong(x, y, z);
+        return at != start && vetoed.contains(at);
+    }
+
     /**
-     * Whether one can stand here, stuck spots or not: for the tile a search starts from.
-     * Vetoing the tile the bot stands on left it unable to start any trip for 90 s.
+     * Whether one can stand here, stuck spots or not: for finding the tile a search starts
+     * from, which is then exempt from them ({@link #startingAt}).
      */
     boolean canStandWithoutVeto(int x, int y, int z) {
         if (!World.super.canStand(x, y, z)) return false;
@@ -226,19 +272,57 @@ final class SnapshotWorld implements World, BlockGetter {
 
     /**
      * Whether a route may go through this block by breaking it: solid, not unbreakable
-     * (bedrock, barriers), on the bot's break list, and not placed by a player. Asked only by
-     * a search that may dig, and only of blocks already in the way of a step.
+     * (bedrock, barriers), on the bot's break list, and neither placed by a player nor a
+     * piece of a build older than the mod (touching a block players build with, or one they
+     * placed: {@link Gather#building}, the rule a gatherer keeps); and no lava over it or
+     * beside it, which would pour into the tunnel once the block is gone (Masurium's miners
+     * never open a block with lava next to it). Asked only by a search that may dig, and only
+     * of blocks already in the way of a step; each answer kept for the search.
      */
     @Override
     public boolean breakable(int x, int y, int z) {
         if (mayBreak.isEmpty() || !solid(x, y, z)) return false;
-        aux.set(x, y, z);
-        BlockState state = read(aux);
-        if (!mayBreak.contains(state.getBlock())) return false;
-        long[] built = placed.get(ChunkPos.asLong(x >> 4, z >> 4));
-        if (built != null && Arrays.binarySearch(built, BlockPos.asLong(x, y, z)) >= 0) return false;
+        long key = BlockPos.asLong(x, y, z);
+        Boolean known = breakables.get(key);
+        if (known != null) return known;
+        boolean yes = digs(x, y, z);
+        breakables.put(key, yes);
+        return yes;
+    }
+
+    private boolean digs(int x, int y, int z) {
+        BlockPos at = new BlockPos(x, y, z);
+        BlockState state = read(at);
+        if (!mayBreak.contains(state.getBlock()) || placedAt(x, y, z)) return false;
+        if (lava(x, y + 1, z) || lava(x + 1, y, z) || lava(x - 1, y, z) || lava(x, y, z + 1) || lava(x, y, z - 1)) {
+            return false;
+        }
+        for (Direction d : Direction.values()) {
+            BlockPos n = at.relative(d);
+            if (building.computeIfAbsent(read(n), Gather::building) || placedAt(n.getX(), n.getY(), n.getZ())) return false;
+        }
         try {
-            return state.getDestroySpeed(this, aux) >= 0;
+            return state.getDestroySpeed(this, at) >= 0;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** Whether a player placed the block there, as the snapshot's arrays have it. */
+    private boolean placedAt(int x, int y, int z) {
+        long[] built = placed.get(ChunkPos.asLong(x >> 4, z >> 4));
+        return built != null && Arrays.binarySearch(built, BlockPos.asLong(x, y, z)) >= 0;
+    }
+
+    /**
+     * Whether eyes at ({@code ex}, {@code ey}, {@code ez}) see a bit of the block at {@code pos}
+     * ({@link Gather#sees}), over the snapshot: for a walk to where a block can be seen and
+     * clicked. A read that trips on a section being written is no sight. On the search's
+     * thread.
+     */
+    boolean sees(double ex, double ey, double ez, BlockPos pos) {
+        try {
+            return Gather.sees(this, new Vec3(ex, ey, ez), pos);
         } catch (RuntimeException e) {
             return false;
         }

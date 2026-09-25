@@ -92,6 +92,10 @@ final class Gathering implements Ability {
             single = kinds.size() == 1 ? k : null;
         }
         if (kinds.isEmpty()) return new Read(null, null, null, "say which block: oak_log, dirt, sand...");
+        // The block's own item named as what to count ("3 stone": block stone, item stone) is
+        // the block itself: counted as the blocks are, what they drop or not (stone drops
+        // cobblestone, and counting stone never got anywhere), dirt with its grass blocks.
+        if (single != null && item == single.asItem()) item = null;
         String what;
         Map<Block, List<Block>> also = also();
         if (single != null && item == null && also.containsKey(single)) {

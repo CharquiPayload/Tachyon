@@ -12,6 +12,7 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import tachyon.path.Route;
@@ -80,6 +81,11 @@ final class Scaffolding implements Ability {
         return block.is(BlockTags.BASE_STONE_OVERWORLD) || block.is(BlockTags.BASE_STONE_NETHER);
     }
 
+    /** Whether it is a block that falls when nothing holds it up: sand, gravel, concrete powder. */
+    private static boolean falls(ItemStack stack) {
+        return stack.getItem() instanceof BlockItem item && item.getBlock() instanceof FallingBlock;
+    }
+
     /** Whether it carries any, hotbar or backpack. */
     static boolean carries(BotPlayer b) {
         Inventory inv = b.getInventory();
@@ -92,6 +98,21 @@ final class Scaffolding implements Ability {
     /** Whether a follower's search may plan building. */
     static boolean mayBuildFollowing(Bots.Bot p) {
         return Settings.bool(p, WHILE_FOLLOWING) && carries(p.body);
+    }
+
+    /**
+     * A tower going up, for a bot while it builds one (its slot): where its block goes, and the
+     * ticks since it jumped. Null {@code at}: none.
+     */
+    static final class Tower {
+        BlockPos at;
+        int ticks;
+    }
+
+    /** A tower half built is let go of: the walk stopped, or the step was blocked. */
+    static void stop(Bots.Bot p) {
+        Tower t = p.slotIfMade(Tower.class);
+        if (t != null) t.at = null;
     }
 
     // --- the walk's build step --------------------------------------------------------------
@@ -112,21 +133,22 @@ final class Scaffolding implements Ability {
         // A tower started is a state, not a condition looked at again: in the jump the body
         // rises and "the point is right over me" stops being true halfway; looking again
         // gave the tower up in the air, and the bot jumped in place for ever.
-        if (p.towerAt != null) {
+        Tower tower = p.slot(Tower.class, Tower::new);
+        if (tower.at != null) {
             b.zza = 0;
             b.xxa = 0;
             b.setSprinting(false);
             b.setJumping(true);
             // Not at take-off: the body is in the cell where the block goes, and the game
             // refuses a block placed into it. At the top of the jump.
-            if (b.getY() > p.towerAt.getY() + TOWER_CLEAR && Bots.handsFree(p)) {
-                BlockPos at = p.towerAt;
-                p.towerAt = null;
+            if (b.getY() > tower.at.getY() + TOWER_CLEAR && Bots.handsFree(p)) {
+                BlockPos at = tower.at;
+                tower.at = null;
                 String failed = place(p, at, Direction.DOWN);
                 if (failed != null) Bots.blocked(p, "I could not build a tower: " + failed);
                 else Bots.placed(p);
-            } else if (++p.towerTicks > TOWER_TICKS) {
-                p.towerAt = null;
+            } else if (++tower.ticks > TOWER_TICKS) {
+                tower.at = null;
                 Bots.blocked(p, "I tried to build a tower and could not get off the ground");
             }
             return true;
@@ -134,8 +156,8 @@ final class Scaffolding implements Ability {
         // The point is over the one it stands on (one up, or more: pushed about, it may have
         // come down from a block of its tower): a block under its feet brings it closer.
         if (goal.x() == px && goal.z() == pz && goal.y() > py && b.onGround()) {
-            p.towerAt = new BlockPos(px, py, pz);
-            p.towerTicks = 0;
+            tower.at = new BlockPos(px, py, pz);
+            tower.ticks = 0;
             b.zza = 0;
             b.xxa = 0;
             b.setSprinting(false);
@@ -180,9 +202,17 @@ final class Scaffolding implements Ability {
         }
         if (!b.canInteractWithBlock(support, 1.0)) return "it is out of my reach";
         if (!level.mayInteract(b, support)) return "I may not build there (the spawn's protection, or the world's border)";
-        if (!isScaffold(b.getMainHandItem())) Job.wield(p, s -> isScaffold(s) ? 1 : 0);
+        // Over nothing (a bridge), sand and gravel fall: they are for towers, which stand on
+        // the block under them. A bridge of sand went to the bottom of a canyon, twice.
+        BlockPos under = where.below();
+        boolean floating = level.getBlockState(under).getCollisionShape(level, under).isEmpty();
+        java.util.function.Predicate<ItemStack> usable = s -> isScaffold(s) && !(floating && falls(s));
+        if (!usable.test(b.getMainHandItem())) Job.wield(p, s -> usable.test(s) ? 1 : 0);
         ItemStack stack = b.getMainHandItem();
-        if (!isScaffold(stack)) return "I carry no blocks to build with (dirt, stone, cobblestone, planks...)";
+        if (!usable.test(stack)) {
+            return floating && carries(b) ? "I carry only blocks that fall (sand, gravel), which do not stay in a bridge"
+                    : "I carry no blocks to build with (dirt, stone, cobblestone, planks...)";
+        }
         Direction face = fromFace.getOpposite();
         Vec3 hit = Vec3.atCenterOf(support).add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5);
         b.lookAt(EntityAnchorArgument.Anchor.EYES, hit);

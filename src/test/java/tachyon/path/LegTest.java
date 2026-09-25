@@ -241,6 +241,90 @@ class LegTest {
         assertEquals(4, Math.max(Math.abs(dx), Math.abs(dz)), "the farthest in a field 9 wide: " + end);
     }
 
+    /** A floor of stone 9 by 5 with fifteen layers of air over it: room to build a tower in. */
+    private static TextWorld tall() {
+        String[] floor = {"#########", "#########", "#########", "#########", "#########"};
+        String[] air = {".........", ".........", ".........", ".........", "........."};
+        String[][] layers = new String[16][];
+        layers[0] = floor;
+        for (int i = 1; i < 16; i++) layers[i] = air;
+        layers[1] = new String[]{".........", ".........", "S........", ".........", "........."};
+        return TextWorld.of(0, layers);
+    }
+
+    @Test
+    @DisplayName("building allowed, a tile high in the air it could not get off again is the ground under it")
+    void noTowerWithNoWayDown() {
+        TextWorld m = tall();
+        Route.Point high = new Route.Point(6, 13, 2);
+        assertFalse(Landing.leavable(m, high, 3), "12 blocks over the floor, nothing beside it");
+        Leg.Found f = Leg.first(m, ask(m.exitPoint(), BUILD, true, false), high);
+        assertTrue(f.hasRoute(), f.route().reason());
+        assertEquals(new Route.Point(6, 1, 2), f.destination(), "the ground under it, not a pillar up to it");
+        for (Route.Point q : f.route().steps()) assertEquals(1, q.y(), "no tower: " + f.route().steps());
+    }
+
+    @Test
+    @DisplayName("building allowed, a tile in the air it could step off (a ledge beside it, or a short drop) is built up to")
+    void aTowerItCanGetOff() {
+        TextWorld m = tall();
+        Route.Point low = new Route.Point(6, 3, 2);
+        assertTrue(Landing.leavable(m, low, 3), "2 over the floor: a drop it may take");
+        Leg.Found f = Leg.first(m, ask(m.exitPoint(), BUILD, true, false), low);
+        assertTrue(f.hasRoute(), f.route().reason());
+        assertEquals(low, f.destination(), "climb up there");
+    }
+
+    @Test
+    @DisplayName("on top of a pillar with air all round it is not in a hole")
+    void aPillarIsNoHole() {
+        TextWorld m = TextWorld.of(0,
+                new String[]{"#####", "#####", "#####"},
+                new String[]{".....", "..#..", "....."},
+                new String[]{".....", "..#..", "....."},
+                new String[]{".....", "..#..", "....."},
+                new String[]{".....", "..S..", "....."},
+                new String[]{".....", ".....", "....."});
+        assertFalse(Rescue.inAHole(m, m.exitPoint()));
+        assertTrue(Rescue.inAHole(pit(false), pit(false).exitPoint()), "a pit's walls still make a hole");
+    }
+
+    @Test
+    @DisplayName("a stuck spot is not built onto: the bridge that failed there is not planned again")
+    void aStuckSpotIsNotBridged() {
+        // One lane over a trench 1 wide and 3 deep: the only way over is a bridge block at (3,4,0).
+        TextWorld m = TextWorld.of(0,
+                new String[]{"#######"},
+                new String[]{"###.###"},
+                new String[]{"###.###"},
+                new String[]{"###.###"},
+                new String[]{"S......"},
+                new String[]{"......."},
+                new String[]{"......."});
+        Route.Point to = new Route.Point(6, 4, 0);
+        assertTrue(Route.search(m, m.exitPoint(), to, BUILD).hasRoute(), "a bridge over it");
+        World vetoing = new World() {
+            public boolean solid(int x, int y, int z) {
+                return m.solid(x, y, z);
+            }
+
+            public boolean water(int x, int y, int z) {
+                return m.water(x, y, z);
+            }
+
+            public boolean vetoed(int x, int y, int z) {
+                return x == 3 && y == 4 && z == 0;
+            }
+
+            public boolean canStand(int x, int y, int z) {
+                return !vetoed(x, y, z) && World.super.canStand(x, y, z);
+            }
+        };
+        Route.Result r = Route.search(vetoing, m.exitPoint(), to, BUILD);
+        assertFalse(r.hasRoute() && r.steps().contains(new Route.Point(3, 4, 0)), "not over the tile it got stuck on: "
+                + r.steps());
+    }
+
     @Test
     @DisplayName("a stuck spot is left out of the search: the same search finds another way")
     void aStuckSpotIsLeftOut() {

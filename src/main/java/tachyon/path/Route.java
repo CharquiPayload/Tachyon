@@ -555,11 +555,14 @@ public final class Route {
             // (break_to_advance toggle): the digging is paid per block. Only straight,
             // like the bridge, and with solid ground: the classic tunnel through dirt or
             // stone.
+            // A tile the bot got stuck on lately is not dug into either: the dig step that
+            // failed there would be planned again, the same, on every search.
             if (op.canBreak() && !diagonal
                     && m.solid(x, p.y - 1, z)
                     && passable(m, x, p.y, z)
                     && passable(m, x, p.y + 1, z)
-                    && (m.solid(x, p.y, z) || m.solid(x, p.y + 1, z))) {
+                    && (m.solid(x, p.y, z) || m.solid(x, p.y + 1, z))
+                    && !m.vetoed(x, p.y, z)) {
                 int toDig = (m.solid(x, p.y, z) ? 1 : 0)
                         + (m.solid(x, p.y + 1, z) ? 1 : 0);
                 steps.add(new Step(new Point(x, p.y, z),
@@ -570,11 +573,13 @@ public final class Route {
             //    below and it is crossed. Only straight: diagonally there is nothing to
             //    rest the block on. Bridging OVER lava is fine (that is how it is
             //    crossed), but not bridging INTO it: the block goes under the feet, not
-            //    in front.
+            //    in front. Nor onto a tile it got stuck on lately: "I could not bridge"
+            //    there, searched again, planned the very same bridge seven times a second.
             if (op.canBuild() && !diagonal
                     && !m.solid(x, p.y, z) && !m.solid(x, p.y + 1, z)
                     && !m.solid(x, p.y - 1, z)
-                    && !m.lava(x, p.y, z) && !m.lava(x, p.y + 1, z)) {
+                    && !m.lava(x, p.y, z) && !m.lava(x, p.y + 1, z)
+                    && !m.vetoed(x, p.y, z)) {
                 steps.add(new Step(new Point(x, p.y, z), base + BRIDGE));
                 continue;
             }
@@ -608,7 +613,8 @@ public final class Route {
         // 5. tower: climb by placing a block under its own feet. It goes outside the
         //    sides loop because it does not change column.
         if (op.canBuild() && !m.solid(p.x, p.y + 1, p.z)
-                && !m.solid(p.x, p.y + 2, p.z)) {
+                && !m.solid(p.x, p.y + 2, p.z)
+                && !m.vetoed(p.x, p.y + 1, p.z)) {
             steps.add(new Step(new Point(p.x, p.y + 1, p.z), TOWER));
         }
         return steps;

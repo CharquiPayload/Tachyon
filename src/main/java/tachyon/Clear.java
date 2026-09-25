@@ -39,7 +39,7 @@ final class Clear extends Job {
     /** A route to a block ends where the eyes are this close to its centre (a player reaches 4.5). */
     private static final double REACH = 4.0;
     /** Where the eyes are over the feet. */
-    private static final double EYES = 1.62;
+    static final double EYES = 1.62;
     /** A block it walked to this many times and could not hit is given up. */
     private static final int TRIES_MAX = 3;
     /** Breaking one block for longer than this (ticks) is a refusal: it gives it up. */

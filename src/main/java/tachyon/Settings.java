@@ -383,6 +383,15 @@ final class Settings {
 
     // --- reading ---------------------------------------------------------------------------
 
+    /**
+     * A setting as players read it, by its key: its label in quotes ("\"Fight players by
+     * name\""), for words players or a bot's brain read. Its key when it has none.
+     */
+    static String named(String key) {
+        Setting s = Abilities.settings().get(key);
+        return s == null ? key : s.named();
+    }
+
     /** Whether a switch is on for the bot. */
     static boolean bool(Bots.Bot p, String key) {
         Settings all = Abilities.settings();

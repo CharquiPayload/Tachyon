@@ -69,7 +69,8 @@ record Prey(Set<EntityType<?>> kinds, String player, String words) {
             if (w.isEmpty()) continue;
             EntityType<?> kind = kind(w);
             if (kind == EntityType.PLAYER) {
-                return new Read(null, "players are prey only by their name, and only when the operators allow it (hunt_players)");
+                return new Read(null, "players are prey only by their name, and only when the operators turn on "
+                        + Settings.named(Fighting.HUNT_PLAYERS));
             }
             if (kind != null) {
                 kinds.add(kind);

@@ -63,6 +63,18 @@ public interface World {
     }
 
     /**
+     * Is this tile left out of the search for now? A tile the bot's body failed to get into
+     * lately (its stuck spots): the same search from the same place would find the same
+     * route into it again. Worlds that keep none (the tests' drawings) inherit the "no".
+     * {@link #canStand} of a world that vetoes answers no for these too; the steps that
+     * build their own floor (a bridge, a tower) or dig their way ask this directly, since
+     * they do not ask whether one can stand there as it is.
+     */
+    default boolean vetoed(int x, int y, int z) {
+        return false;
+    }
+
+    /**
      * Can one stand here?
      * The player is two blocks tall, so two free blocks with something solid below are
      * needed. Being inside water also counts: one floats.
