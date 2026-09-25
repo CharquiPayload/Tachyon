@@ -12,9 +12,11 @@ import java.util.UUID;
  * {@code hit:<player>}), and the count starts again. One hit is an accident, a stray arrow;
  * three in a row are not. Masurium's numbers.
  *
- * <p>It never hits back: whether a bot may fight players is a setting of its own (a later
- * one), and what to say to whoever does this is its brain's, when its notices go through
- * it. Hits from a player the bot hit first lately are left out: that fight is its own.
+ * <p>It never hits back: whether a bot may fight players is the operators' to say
+ * ({@link Fighting}'s {@code hunt_players}, for a player named to its brain; defending
+ * itself comes later), and what to say to whoever does this is its brain's, when its
+ * notices go through it. Hits from a player the bot hit first lately (the last one it hit,
+ * within 20 s) are left out: that fight is its own.
  * An arrow counts as its shooter's hit. It costs nothing between hits: it runs only when
  * the bot is hurt.
  */

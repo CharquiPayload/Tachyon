@@ -126,13 +126,13 @@ final class Fighting implements Ability {
     private void end(Bots.Bot p, Strikes s, String how) {
         STRIKES.remove(p);
         Bots.freeHands(p, this);
-        String name = name(s.target);
+        String name = called(s.target);
         if (s.hits == 0) {
-            s.told.complete("I did not get to hit the " + name + ": " + how);
+            s.told.complete("I did not get to hit " + name + ": " + how);
             return;
         }
         String hits = s.hits == 1 ? "once" : s.hits + " times";
-        s.told.complete("I hit the " + name + " " + hits + " with " + s.with + (how.equals(DIED) ? ", and it died" : "; " + how));
+        s.told.complete("I hit " + name + " " + hits + " with " + s.with + (how.equals(DIED) ? ", and it died" : "; " + how));
     }
 
     @Override
@@ -161,6 +161,11 @@ final class Fighting implements Ability {
 
     private static String name(Entity e) {
         return e instanceof Player pl ? pl.getGameProfile().getName() : BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).getPath();
+    }
+
+    /** What it hit, as a sentence names it: a player by name ("Steve"), a mob by kind ("the zombie"). */
+    private static String called(Entity e) {
+        return e instanceof Player ? name(e) : "the " + name(e);
     }
 
     /**
