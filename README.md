@@ -13,9 +13,11 @@ anything, and no bot needs a Minecraft account or a game client of its own.
 
 **Early days (0.2.0).** It walks, follows, hunts, clears areas and talks; it
 fights with a sword and a bow, wears armor, eats, and tosses what it does not
-need; it comes back when it dies (and goes back for what it dropped) and when
-the server restarts; its settings have an in-game menu; most of what a player
-does is still to come.
+need; by itself it fights back, shoots or runs from creepers, backs off when
+badly hurt, comes up for air, digs itself out when buried and eats when hungry;
+it comes back when it dies (and goes back for what it dropped) and when the
+server restarts; its settings have an in-game menu; most of what a player does
+is still to come.
 
 ## Installing
 
@@ -78,7 +80,10 @@ a few times a minute (`per_minute`).
 
 **What it tells you unasked.** A bot also tells its owner what nobody asked
 about: how going back for its things after a death went, a player who keeps
-hitting it. Its `notices` setting says how: `brain` (the default), its brain
+hitting it, and what it could not deal with by itself ([What it does by
+itself](#what-it-does-by-itself): cornered, drowning, buried for good, hungry
+with nothing to eat, out of arrows, a tool about to break, phantoms). Its
+`notices` setting says how: `brain` (the default), its brain
 says it in the chat in its own words (one call to its model, as when it tells
 how an order went); `plain`, a line to its owner only (`[tachyon] Ada: got back
 all 230 items it dropped when it died at 12 64 -30`), no call; `off`, nothing. A
@@ -87,9 +92,11 @@ bot with no brain set up says it plainly. Each kind of notice is said once every
 
 **A player who keeps hitting it** (3 hits in a row, each within 20 s of the one
 before) is told to its owner: `Steve hit it 3 times in 6 s (7 health lost); it
-has not hit back`. It never hits back. Hits from a player it hit first, in the
-20 s before (with `hunt_players`, its brain may attack a player named to it), are
-left out: that fight is its own.
+has not hit back`. It does not hit back, unless the operators turned on its
+`defend_from_players` ([Fighting back](#fighting-back)). Hits from a player it
+hit first, in the 20 s before (with `hunt_players`, its brain may attack a player
+named to it; with `defend_from_players`, it fights back), are left out: that
+fight is its own.
 
 ## Death, restarts and the night
 
@@ -137,8 +144,12 @@ the night: the players skip it by sleeping without them, and the "n/m players
 sleeping" line counts only the players; and no phantom is spawned because of a
 bot (phantoms come for a player who has not slept for three days, and once there
 they attack any player near, bots too). With it false a bot counts as any player
-does, and the night is skipped only if enough bots sleep too. It is
-the operators' to change, since it changes the night for everyone.
+does, and the night is skipped only if enough bots sleep too; then phantoms may
+come for it after three nights without a bed, and the first time one hits it its
+owner is told (a night in a bed ends it, but that skips the night for everyone,
+so the bot does not decide it; going to bed by itself comes later). Either way
+it hits phantoms when they dive. It is the operators' to change, since it changes
+the night for everyone.
 
 ## Fighting, gear and food
 
@@ -230,6 +241,89 @@ told when it tossed its trash to make room, or found its backpack full with
 nothing to toss (once in 10 minutes at most: every word to it is a paid call to a
 model).
 
+## What it does by itself
+
+A bot's brain thinks only when it is spoken to, and a call to a model takes
+seconds: a fight is measured in ticks. So the body looks after itself, without
+its brain, as Masurium's bots did, with their numbers. What it is doing is set
+aside while it does, and taken up again after, where it was: an order is never
+dropped for it. Its owner hears only of what it could not deal with, with the
+numbers ([What it tells you unasked](#talking-to-a-bot)); the rest goes to the
+server's log, a line a time.
+
+### Fighting back
+
+**Hit, it hits back**, for 8 s after the hit: the nearest hostile mob within its
+reach, or whatever hurt it, with its best weapon (brought up from its backpack,
+which costs the tick a new item's charge starts again in), each hit once the attack
+is 90% charged. It never hits first, never a creeper, never its owner's pets, and
+keeps walking wherever it was going while it hits. It waits for a bite to be over.
+
+**What hurts it from afar** (a skeleton, a pillager, a witch), and a mob with a bow
+or crossbow it sees taking aim at it, before the first arrow: with a bow and a clear
+shot from 10 blocks or more, it shoots back (never at a witch, who drinks potions
+faster than arrows hurt, a breeze or an enderman); a flyer it does not chase: it
+stands and hits it when it dives; else it goes for it, and hits it once in reach.
+It lets go of one that has not hurt it for 15 s, is farther than 25 blocks, or that
+it finds no way to. A hunt or a kill ordered against that very kind fights it as
+it does.
+
+**Players** are fought only with its `defend_from_players` on (off by default, the
+operators' to change): then a player who hurts it, or who hurts its owner within
+16 blocks of it where it sees them, is fought as a mob that hurt it; never its
+owner, a bot of its owner's, or a player in creative or spectator. Without it, a
+player's hits bring its owner a notice, and nothing more.
+
+### Creepers
+
+Never by sword. From 10 to 25 blocks, in sight, with a bow and arrows, it shoots
+it, standing (`shoot_creepers`, on by default): an arrow does not light a creeper.
+Not from water, with a player on or near the line, at one swelling within 7, at one
+with a name (someone cares for it), or while something else is hitting it. Within 10 blocks, or swelling within 16, it
+drops what it is doing and runs, sprinting while it has the food for it (above 6),
+to anywhere 40 blocks from the creeper (16 in a closed place with nowhere that far),
+until the creeper is 16 blocks off. It counts the
+creepers it sees, and any within 4 (round a corner they blow all the same); not one
+with no way on foot to it (for 30 s), nor one that made it run three times in 90 s
+without reaching it (for 90 s), unless it is within 7. Cornered, its owner is told.
+
+### Badly hurt
+
+With 6 health or less (or poisoned) and something hostile at hand (whatever hurt
+it in the last 15 s, within 25 blocks, or a hostile mob within 12 that it sees), it
+drops what it is doing and backs off, toward anywhere 40 blocks from it (24 in a
+closed place), and does not stop until nothing hostile is within 24 blocks, health
+or no health: stopping as soon as it had a little back is how the zombie behind
+catches up. Cornered, its owner is told; cornered for 30 s, it stands its ground,
+for 30 s more. `retreat_when_hurt` turns it off.
+
+### Air and sand
+
+Standing still in deep water (following someone who stopped on a lake, waiting),
+it holds jump, as a player does, and keeps its head above it. Under water with 100
+of its 300 air left, it drops what it is doing and comes up: straight up, or, with
+something over it (ice, a ledge, a cave's roof), along a way to the nearest open
+water and up from there; and goes back to what it was doing once its air is 250
+again. Drowning with no way up, its owner is told.
+
+Buried (sand or gravel fell on it, and the game hurts it for being inside a block),
+it breaks what covers its head, then what fills the space of its feet, before
+anything else: with its hands, the best tool it carries for the block, and the time
+the block takes. A block it cannot break (bedrock, a protected spawn), or cannot
+break in 30 s, is given up, and its owner told.
+
+### Hunger and what it lacks
+
+It eats by itself: with hunger below 10, whatever its health; with health missing
+and hunger below 18 (below that, health does not come back by itself); and under
+half its health with hunger below 20. It eats the best food it may eat on its own
+([Eating](#eating): never banned or harmful food), brought up from its backpack,
+and a bite that cannot start now is tried again 5 s later; not while it runs from
+a creeper, backs off, comes up for air or fights, unless it is starving. Its owner
+is told, once when it happens: hungry (8 or less) with nothing it may eat (and what
+it carries that it does not eat on its own, and why), its bow out of arrows, a
+piece of armor or the tool in its hand about to break (15% of its uses left).
+
 ## Settings
 
 Settings are switches, numbers and choices that say how a bot goes about what it
@@ -251,6 +345,9 @@ one.
 | `dress_alone` | Put on better armor | Gear | basic | owner, operators | `true` | whether it puts on better armor it carries by itself (it looks every 10 s) |
 | `trash_at_once` | Toss trash at once | Gear | advanced | owner, operators | `false` | whether it tosses its trash as soon as it picks it up; false: only when its backpack is full ([Tossing](#tossing-and-trash)) |
 | `hunt_players` | Fight players by name | Fighting | advanced | operators | `false` | whether its brain's attack and kill may go after a player named to them |
+| `shoot_creepers` | Shoot creepers | Fighting | advanced | owner, operators | `true` | whether it shoots creepers 10 to 25 blocks away with its bow by itself; without it, it only runs from those that come close ([Creepers](#creepers)) |
+| `retreat_when_hurt` | Back off when badly hurt | Fighting | advanced | owner, operators | `true` | whether it breaks off what it is doing and backs off when badly hurt (6 health or less, or poisoned) with something hostile at hand, until nothing hostile is within 24 blocks ([Badly hurt](#badly-hurt)) |
+| `defend_from_players` | Defend from players | Fighting | advanced | operators | `false` | whether it also fights players who attack it or its owner, as it fights mobs that do; without it, a player's hits only bring its owner a notice ([Fighting back](#fighting-back)) |
 
 A bot's value is the first of four layers that has one:
 
@@ -361,12 +458,16 @@ VMs). A tick has 50 ms (20 a second) before the server lags:
 About 0.02–0.06 ms of the tick and about 2 MB of memory per bot. Route searches
 and the model's answers run on threads of their own, never on the tick. What a
 bot does by itself (armor looked at every 10 s, trash on a pickup, a bite or a few
-hits under way, a trip back for its things after a death, hits from players counted)
-costs next to nothing while there is nothing to do: with 100 idle bots, about
-0.25 µs a bot a tick for all of it, timed one by one. `/tachyon stats` can barely
-tell it: 5.24 ms a tick for the 100 without it and 5.36 with it (medians of 18
-samples of 20 s, the two builds taking turns; single samples ranged from 4.7 to
-5.7 ms). A busy
+hits under way, a trip back for its things after a death, hits from players
+counted, and [the reflexes](#what-it-does-by-itself): a look around for hostile
+mobs every 10 ticks, none on a peaceful server) costs next to nothing while there
+is nothing to do. With 100 idle bots, timed one by one: about 0.25 µs a bot a tick
+for the gear, food, trash and death, and about 0.2 µs more for the reflexes.
+`/tachyon stats` cannot tell the reflexes apart from its own noise: 1.78 ms a tick
+for the 100 without them and 1.76 with them on normal difficulty, 1.72 and 1.71 on
+peaceful (medians of 12 samples of 20 s each, the two builds taking turns; single
+samples ranged from 1.6 to 2.3 ms). In a fight they work: 100 bots with iron swords
+among 30 zombies (all dead within 10 s) cost 3.1 ms a tick over that minute. A busy
 modpack leaves less room than a plain server: measure yours with
 `/tachyon stats` and `/tick query`.
 

@@ -133,6 +133,11 @@ final class Hunt extends Job {
         return killing ? "killing" : "hunting";
     }
 
+    /** What it goes after: a mob of these kinds that hurts it is left to this hunt to fight ({@link Defending}). */
+    Prey prey() {
+        return prey;
+    }
+
     private String counted() {
         return killed + (wanted > 0 ? " of " + wanted : "");
     }

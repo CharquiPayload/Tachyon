@@ -83,6 +83,11 @@ final class Shoot extends Job {
         return killed + (wanted > 0 ? " of " + wanted : "");
     }
 
+    /** What it goes after: a mob of these kinds that hurts it is left to this kill to fight ({@link Defending}). */
+    Prey prey() {
+        return prey;
+    }
+
     @Override
     String status() {
         return "killing " + prey.words() + " with arrows: " + counted() + " killed" + (inFlight ? ", an arrow in the air" : "");

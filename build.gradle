@@ -44,6 +44,9 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+    // SettingsTest holds the README's settings table to the code: a README changed alone
+    // must run it again, and not be answered from the build cache.
+    inputs.file('README.md')
     testLogging {
         events 'passed', 'failed', 'skipped'
         exceptionFormat 'full'

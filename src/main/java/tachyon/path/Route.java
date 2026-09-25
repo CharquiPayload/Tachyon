@@ -115,6 +115,29 @@ public final class Route {
                 }
             };
         }
+
+        /**
+         * At least {@code far} blocks from a point, flat, in any direction: getting away
+         * from something (a creeper, a zombie). Any tile of that ring, the nearest by cost;
+         * the estimate is what is missing to it, walked (no step covers more flat ground
+         * than it pays for walking it, so it never estimates over).
+         */
+        static Meta awayFrom(double fx, double fz, double far) {
+            double farSq = far * far;
+            return new Meta() {
+                public boolean isGoal(int x, int y, int z) {
+                    double dx = x + 0.5 - fx, dz = z + 0.5 - fz;
+                    return dx * dx + dz * dz >= farSq;
+                }
+                public double heuristic(int x, int y, int z) {
+                    double dx = x + 0.5 - fx, dz = z + 0.5 - fz;
+                    return Math.max(0, far - Math.sqrt(dx * dx + dz * dz)) * WALK;
+                }
+                public String toString() {
+                    return String.format("%.0f from %.1f,%.1f", far, fx, fz);
+                }
+            };
+        }
     }
 
     /**

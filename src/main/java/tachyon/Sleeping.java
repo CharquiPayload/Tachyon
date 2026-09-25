@@ -1,7 +1,11 @@
 package tachyon;
 
+import com.mojang.logging.LogUtils;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.stats.Stats;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.monster.Phantom;
+import org.slf4j.Logger;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -20,9 +24,20 @@ import java.util.List;
  * last slept (a statistic, which a sleep sets back to 0): a bot's is set back to 0 every
  * second, and never nears the three days the phantom spawner waits for.
  *
+ * <p><b>Phantoms</b> that come for it, when it counts ({@code ignore_for_sleep} false: its
+ * nights without a bed are counted, as a player's are): the first time one hits it, its owner
+ * hears of it (once in 10 minutes at most, {@link Notices}), since a night in a bed is what
+ * ends them, and sleeping skips the night for everyone, which is not the bot's to decide.
+ * Meanwhile it hits them when they dive ({@link Defending}: phantoms are hostile). Going to
+ * bed by itself, Masurium's {@code sleep_alone}, comes with the beds. Left out of sleeping,
+ * no phantom comes for it; one that came for a player near it and hits it is fought, and
+ * no more is said.
+ *
  * <p>Public for the mixin only, whose code runs inside Minecraft's class.
  */
 public final class Sleeping implements Ability {
+
+    private static final Logger LOG = LogUtils.getLogger();
 
     /** Whether the night goes on without it: it does not count for sleeping, and no phantom spawns because of it. */
     static final String IGNORED = "ignore_for_sleep";
@@ -63,6 +78,19 @@ public final class Sleeping implements Ability {
             seen.ignored = ignored;
             p.body.serverLevel().updateSleepingPlayerList();
         }
+    }
+
+    /** A phantom hit it, and it counts for the night: its owner is told what would end it, and whose call that is. */
+    @Override
+    public void hurt(Bots.Bot p, DamageSource source, float amount) {
+        if (!(source.getEntity() instanceof Phantom) || Settings.bool(p, IGNORED)) return;
+        BotPlayer b = p.body;
+        int nights = b.getStats().getValue(Stats.CUSTOM.get(Stats.TIME_SINCE_REST)) / 24000;
+        LOG.info("[tachyon] {} is attacked by phantoms at {} ({} nights without a bed)", p.name(), Brain.pos(b.blockPosition()), nights);
+        Notices.say(p, "phantoms", "is attacked by phantoms at " + Brain.pos(b.blockPosition()) + " (one hit it; it has gone "
+                + nights + (nights == 1 ? " night" : " nights") + " without a bed): they come for a player who has not slept"
+                + " for three nights, and a night in a bed ends it, but sleeping skips the night for everyone, which is not its"
+                + " to decide; meanwhile it hits them when they dive");
     }
 
     /**

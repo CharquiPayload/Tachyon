@@ -376,6 +376,32 @@ class RouteTest {
     }
 
     @Test
+    @DisplayName("goal 'away from': any tile that far from the point, flat, getting round what is in the way")
+    void awayFromAnyTileThatFar() {
+        // What it gets away from stands west of it (G); east is walled but for a gap to the
+        // north: the way off goes round, and ends 4 or more blocks from G.
+        TextWorld m = TextWorld.of(0,
+                new String[]{"#########", "#########", "#########"},
+                new String[]{".........", "G.S.#....", "....#...."},
+                new String[]{".........", "....#....", "....#...."},
+                new String[]{".........", ".........", "........."},
+                new String[]{".........", ".........", "........."});
+        Route.Point from = m.goal();
+        Route.Result r = Route.search(m, m.exitPoint(), Route.Meta.awayFrom(from.x() + 0.5, from.z() + 0.5, 6.0),
+                Route.Options.byDefault());
+        assertTrue(r.hasRoute(), r.reason());
+        Route.Point end = r.steps().get(r.steps().size() - 1);
+        double dx = end.x() - from.x(), dz = end.z() - from.z();
+        assertTrue(dx * dx + dz * dz >= 36, "it ends too close: " + end);
+        for (Route.Point p : r.steps()) assertFalse(m.solid(p.x(), p.y(), p.z()), "through the wall at " + p);
+
+        // Walled in, with nowhere that far: no route, said as such (the caller asks for less, or is cornered).
+        Route.Result none = Route.search(m, m.exitPoint(), Route.Meta.awayFrom(from.x() + 0.5, from.z() + 0.5, 20.0),
+                Route.Options.byDefault());
+        assertFalse(none.hasRoute(), "nothing is 20 blocks off in a map 9 wide");
+    }
+
+    @Test
     @DisplayName("anti-dithering: recently stepped tiles are avoided if there is a twin")
     void antiDitheringRecentlySteppedTilesAreAvoided() {
         // An open field of three rows: the straight path goes through the middle. If the

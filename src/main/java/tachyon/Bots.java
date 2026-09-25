@@ -232,8 +232,9 @@ public final class Bots {
         Order order;
 
         // What waits, and who holds what: see takeOver, holdHands and orderStanding.
-        /** The reflex that holds its body, or null; and the order it set aside meanwhile. */
+        /** The reflex that holds its body, or null; how urgently (see takeOver); and the order it set aside meanwhile. */
         Ability heldBy;
+        int heldUrgency;
         Aside aside;
         /** The reflex that holds its hands, until that tick. */
         Ability handsBy;
@@ -710,16 +711,39 @@ public final class Bots {
      * @return whether the reflex holds it now: false when another does (first come, first served)
      */
     static boolean takeOver(Bot p, Ability by, String doing) {
-        if (p.heldBy == by) return true;
-        if (p.heldBy != null) return false;
-        Job j = p.job;
-        p.job = null;
-        if (j != null) j.end(p);
-        p.aside = new Aside(j, p.target, p.following, p.order);
-        p.target = null;
-        p.following = null;
-        p.order = null;
+        return takeOver(p, by, 0, doing);
+    }
+
+    /**
+     * Its body, taken over by a reflex that comes before others: from a reflex that holds it
+     * less urgently, too. Fleeing a creeper about to blow comes before backing off from a
+     * zombie, and coming up for air before both (the ranks are in
+     * docs/adding-an-ability.md). The reflex it is taken from finds it no longer holds it
+     * ({@link #holding} is not itself), as when an order ends a hold, and lets go of what
+     * it did with it; what was set aside stays set aside, and whoever gives the body back
+     * gives the order back. A reflex still in need takes it again on its next tick.
+     *
+     * @param urgency how urgent the hold is; the plain {@link #takeOver} holds at 0, and
+     *                gives way to any other
+     * @return whether the reflex holds it now: false when another holds it as urgently or more
+     */
+    static boolean takeOver(Bot p, Ability by, int urgency, String doing) {
+        if (p.heldBy == by) {
+            p.heldUrgency = urgency;
+            return true;
+        }
+        if (p.heldBy != null && urgency <= p.heldUrgency) return false;
+        if (p.heldBy == null) {
+            Job j = p.job;
+            p.job = null;
+            if (j != null) j.end(p);
+            p.aside = new Aside(j, p.target, p.following, p.order);
+            p.target = null;
+            p.following = null;
+            p.order = null;
+        }
         p.heldBy = by;
+        p.heldUrgency = urgency;
         halt(p, doing);
         return true;
     }
@@ -737,6 +761,7 @@ public final class Bots {
         if (p.heldBy != by) return;
         Aside a = p.aside;
         p.heldBy = null;
+        p.heldUrgency = 0;
         p.aside = null;
         halt(p, "standing");
         p.job = a.job();
@@ -770,6 +795,7 @@ public final class Bots {
     /** A hold on its body ended by an order: what it set aside is replaced (its job was let go of then). */
     private static void dropHold(Bot p) {
         p.heldBy = null;
+        p.heldUrgency = 0;
         p.aside = null;
     }
 
@@ -1437,6 +1463,24 @@ public final class Bots {
             return r;
         });
         p.doing = doing;
+    }
+
+    /**
+     * A search of an ability's own, apart from any bot's walk (whether a creeper can walk to
+     * a bot, say): {@code work} runs on a routes thread over the loaded chunks around
+     * {@code a} and {@code b}, and its answer comes as a future, looked at on a later tick
+     * and never waited for on the server's thread. The snapshot is taken here, on it.
+     */
+    static <T> Future<T> search(ServerLevel level, BlockPos a, BlockPos b, Function<SnapshotWorld, T> work) {
+        long started = System.nanoTime();
+        SnapshotWorld world = SnapshotWorld.around(level, a, b, MARGIN, MAX_CHUNKS);
+        long took = System.nanoTime() - started;
+        synchronized (STATS) {
+            STATS.snapshots++;
+            STATS.snapshotNanos += took;
+            STATS.maxSnapshotNanos = Math.max(STATS.maxSnapshotNanos, took);
+        }
+        return ROUTES.submit(() -> work.apply(world));
     }
 
     private static void follow(Bot p, long now) {

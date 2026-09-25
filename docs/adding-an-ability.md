@@ -399,6 +399,25 @@ takes what it needs, for a while:
   it was. It returns false when another reflex holds the body (first come,
   first served). An order given meanwhile ends the hold and replaces what was
   set aside; the reflex sees `Bots.holding(p) != this` and may take it again.
+- **The body, before others**: `Bots.takeOver(p, this, urgency, doing)` takes
+  it from a reflex that holds it less urgently, too (the plain `takeOver` holds
+  at 0). That one finds `Bots.holding(p) != this`, as when an order ends a hold,
+  and lets go of what it did with it (a bow drawn, keys); what was set aside
+  stays set aside, and whoever gives the body back gives the order back. A
+  reflex still in need takes the body again on its next tick. The ranks there
+  are, most urgent first:
+
+  | urgency | reflex | when |
+  |---|---|---|
+  | 60 | `DiggingOut` | buried: breaking what covers its head |
+  | 50 | `Breathing` | out of air under water: coming up |
+  | 40 | `Creepers` | a creeper within 10: running |
+  | 30 | `Retreating` | badly hurt with something hostile at hand: backing off |
+  | 20 | `Defending` | answering an attacker out of reach: shooting back, going for it |
+  | 10 | `Creepers` | a creeper 10 to 25 away: shooting it |
+
+  Hold at the rank of what the reflex does now: the same reflex asks again with
+  another urgency when that changes (a creeper shot, then run from).
 - **The hands**, for a few ticks: `Bots.holdHands(p, this, 32)` (a bite, a
   swing, a bow drawn). The job's hands wait (its `act` is skipped, `Job.hold`
   swaps nothing) while its walk goes on. `Bots.freeHands(p, this)` to let go
@@ -423,6 +442,23 @@ it (`body.stopUsingItem()`) on every way out. What there is to build on:
   targets not worth another arrow.
 - **Trash**: `Tossing.tossTrash(p)` tosses its trash but one stack of each block
   it builds with.
+- **What is hostile around**: `Threats.around(p, now)`, the hostile mobs within
+  25 blocks, walls and all, looked up once a tick for a bot however many reflexes
+  ask. Look when `Threats.due(p, now)` says (every 10 ticks, each bot on a tick of
+  its own), and at what you already know in between. `Threats.noticed(b, e, 4)`
+  is what a player in its place makes out: what it sees, and what is right next
+  to it.
+- **Getting away**: `Retreating.away(p, from, far, doing)` searches a route to
+  anywhere `far` blocks from something (a goal of the path finder's,
+  `Route.Meta.awayFrom`), walked by the legs; in a closed place with nowhere that
+  far it finds none, and the caller asks for less, or is cornered.
+- **A search of its own**, apart from the walk (whether a creeper can walk to the
+  bot): `Bots.search(level, a, b, world -> ...)` runs on a routes thread over the
+  chunks around `a` and `b`, and its answer is a future, looked at on a later
+  tick, never waited for.
+- **What the others are at**: `Defending.fighting(p)` (hit lately, or answering
+  an attacker), `Creepers.fleeing(p)`, `Eating.eating(p)`, `Bots.holding(p)`.
+  A reflex that eats, shoots or trades hits by itself asks them first.
 
 **Nothing that sends a bot away, or brings one in, runs inside a tick**: not
 from a reflex, not from a hook. `server.execute(...)` does NOT wait there: on
