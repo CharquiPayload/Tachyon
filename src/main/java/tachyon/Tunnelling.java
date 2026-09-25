@@ -43,6 +43,12 @@ import java.util.Set;
  * The list is looked at again on the block itself as it is dug: a route searched a moment
  * ago is no permission for a block that changed since.
  *
+ * <p>Whatever the list says, it never digs a block a player placed ({@link PlacedBlocks}):
+ * a player's build is broken only on a person's order, as a gatherer leaves it alone. The
+ * search does not plan through one ({@link SnapshotWorld#sparing}), and one placed since the
+ * search is refused as it is reached. A build older than the mod is not known as one: its
+ * blocks are only what the list says.
+ *
  * <p>Breaking destroys other people's world, which building to move only adds to: that is
  * why it is off unless asked, and why the path finder charges 40 ticks a block for it,
  * more than any reasonable way round.
@@ -116,6 +122,11 @@ final class Tunnelling implements Ability {
         String name = name(s);
         if (!mayBreak(p, s)) {
             Bots.blocked(p, "the way is blocked by " + name + " and I have no permission to break it");
+            return true;
+        }
+        if (PlacedBlocks.byPlayer(level, plug)) {
+            Bots.blocked(p, "the way is blocked by " + name + " that a player placed, and I never break a player's"
+                    + " build on my own");
             return true;
         }
         if (s.getDestroySpeed(level, plug) < 0) {
@@ -261,9 +272,9 @@ final class Tunnelling implements Ability {
     @Override
     public void tools(Tools tools) {
         tools.add(new Tool("break_permissions", "The blocks you may break on your own to make your way, digging through"
-                + " when there is no other way (only with your dig-through setting on). What you are told to break"
-                + " (clear a box) never needs it. You cannot change it: your owner or an operator does, with"
-                + " /tachyon break.", List.of(),
+                + " when there is no other way (only with your dig-through setting on), and never a block a player"
+                + " placed. What you are told to break (clear a box) never needs it. You cannot change it: your owner"
+                + " or an operator does, with /tachyon break.", List.of(),
                 call -> {
                     Bots.Bot p = call.bot();
                     List<String> names = names(p);

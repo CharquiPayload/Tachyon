@@ -1,11 +1,14 @@
 package tachyon;
 
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -16,10 +19,13 @@ import net.neoforged.neoforge.common.util.BlockSnapshot;
 import net.neoforged.neoforge.event.level.BlockEvent;
 import net.neoforged.neoforge.event.level.ExplosionEvent;
 
+import java.util.Arrays;
+
 /**
  * The blocks players placed, so that a bot never takes a piece of someone's build unless
- * a person orders it to: a bot that gathers leaves them alone ({@link Gather}), and its
- * brain's {@code clear} refuses a box that holds one ({@link Clearing}). The day this was
+ * a person orders it to: a bot that gathers leaves them alone ({@link Gather}), one that
+ * digs through to get somewhere never digs one ({@link Tunnelling}), and its brain's
+ * {@code clear} refuses a box that holds one ({@link Clearing}). The day this was
  * written, a bot asked for dirt had nothing to get it with but {@code clear}, and cleared a
  * box around itself: nine blocks of its owner's house.
  *
@@ -36,7 +42,7 @@ import net.neoforged.neoforge.event.level.ExplosionEvent;
  */
 final class PlacedBlocks implements Ability {
 
-    /** Places kept per level at most (about 3 MB of memory, 800 kB on disk): past it, the oldest go. */
+    /** Places kept per level at most (about 4 MB of memory, 800 kB on disk): past it, the oldest go. */
     static final int MAX = 100_000;
     /** The name of the level's file, under its data folder. */
     private static final String FILE = "tachyon_placed";
@@ -123,16 +129,84 @@ final class PlacedBlocks implements Ability {
      */
     static final class Places extends SavedData {
         private final LongLinkedOpenHashSet set = new LongLinkedOpenHashSet();
+        /**
+         * The same places by chunk ({@link ChunkPos#asLong}), each chunk's a sorted array
+         * that a change replaces whole and nothing writes into after: what a route search
+         * reads off the server's thread ({@link #inChunk}), where the set, changing under
+         * it, could not be read. Players place a few blocks a second at most, so copying a
+         * chunk's array on each costs nothing that shows.
+         */
+        private final Long2ObjectOpenHashMap<long[]> byChunk = new Long2ObjectOpenHashMap<>();
 
         /** A place, the newest now (placed again: it goes to the end); the oldest forgotten past {@link #MAX}. */
         void add(BlockPos pos) {
-            set.addAndMoveToLast(pos.asLong());
-            while (set.size() > MAX) set.removeFirstLong();
+            long at = pos.asLong();
+            if (set.addAndMoveToLast(at)) index(at, true);
+            while (set.size() > MAX) index(set.removeFirstLong(), false);
             setDirty();
         }
 
         void remove(BlockPos pos) {
-            if (set.remove(pos.asLong())) setDirty();
+            long at = pos.asLong();
+            if (set.remove(at)) {
+                index(at, false);
+                setDirty();
+            }
+        }
+
+        /**
+         * The places in one chunk, sorted ({@code BlockPos.asLong}), or null for none. The
+         * array is never changed after it is handed out: a search on another thread may keep
+         * it and look places up in it ({@code Arrays.binarySearch}) while players build on.
+         */
+        long[] inChunk(long chunk) {
+            return byChunk.get(chunk);
+        }
+
+        /** A place put in its chunk's array, or taken out of it: a new array either way. */
+        private void index(long at, boolean in) {
+            long chunk = chunkOf(at);
+            long[] old = byChunk.get(chunk);
+            int i = old == null ? -1 : Arrays.binarySearch(old, at);
+            if (in) {
+                if (i >= 0) return;
+                int to = old == null ? 0 : -i - 1;
+                long[] now = new long[old == null ? 1 : old.length + 1];
+                if (old != null) {
+                    System.arraycopy(old, 0, now, 0, to);
+                    System.arraycopy(old, to, now, to + 1, old.length - to);
+                }
+                now[to] = at;
+                byChunk.put(chunk, now);
+            } else if (i >= 0) {
+                if (old.length == 1) {
+                    byChunk.remove(chunk);
+                    return;
+                }
+                long[] now = new long[old.length - 1];
+                System.arraycopy(old, 0, now, 0, i);
+                System.arraycopy(old, i + 1, now, i, old.length - i - 1);
+                byChunk.put(chunk, now);
+            }
+        }
+
+        /** Every chunk's array made from the set at once: as a level's places are read. */
+        private void reindex() {
+            Long2ObjectOpenHashMap<LongArrayList> lists = new Long2ObjectOpenHashMap<>();
+            for (LongIterator it = set.iterator(); it.hasNext(); ) {
+                long at = it.nextLong();
+                lists.computeIfAbsent(chunkOf(at), c -> new LongArrayList()).add(at);
+            }
+            byChunk.clear();
+            for (var e : lists.long2ObjectEntrySet()) {
+                long[] a = e.getValue().toLongArray();
+                Arrays.sort(a);
+                byChunk.put(e.getLongKey(), a);
+            }
+        }
+
+        private static long chunkOf(long at) {
+            return ChunkPos.asLong(BlockPos.getX(at) >> 4, BlockPos.getZ(at) >> 4);
         }
 
         boolean has(BlockPos pos) {
@@ -171,6 +245,7 @@ final class PlacedBlocks implements Ability {
             Places p = new Places();
             for (long pos : tag.getLongArray("places")) p.set.add(pos);
             while (p.set.size() > MAX) p.set.removeFirstLong();
+            p.reindex();
             return p;
         }
     }

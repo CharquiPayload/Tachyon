@@ -42,8 +42,9 @@ do, rebuilt to run on the server, and adds things only a server can do.
     only that kind of block, in the open, and picks up what drops. When none
     is near, it goes out looking.
   - Builds are safe. The server keeps the blocks players placed, and a bot
-    never gathers them or what they touch. Its brain's `clear` refuses a box
-    that holds them; a person's `/tachyon clear` still works.
+    never gathers them or what they touch, nor digs through them to get
+    somewhere. Its brain's `clear` refuses a box that holds them; a person's
+    `/tachyon clear` still works.
   - A `verbose` setting: technical lines for the owner only when asked for.
     Deaths and orders given by a command reach the owner through the notices.
   - A spawn point set on a slab or a dirt path works: the bot tries one block

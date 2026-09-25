@@ -252,7 +252,10 @@ same tick.
 the walk's, `Bots.walkOptions(p, build, nodes)`: partial routes, as long a fall
 as its health allows (`Bots.safeFall`, Masurium's: 3 blocks, a block more for
 every 4 health, 12 at most), and digging through its break list when its
-`break_to_advance` is on. A route searched with building or digging allowed is
+`break_to_advance` is on, never through a block a player placed (the snapshot
+of a search that digs carries them, `SnapshotWorld.sparing`, and the dig step
+looks again at the block itself). Only trips and followers build; a job's walk
+may dig, as every walk may. A route searched with building or digging allowed is
 walked with those steps: the legs place the block a bridge or a tower needs, and
 dig the one in the way, before walking on. `Bots.arriveWithin(p, slack)`, after
 a `plan`, is how close to the last point the walk ends (1.4 blocks unless asked).

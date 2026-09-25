@@ -7,6 +7,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -62,7 +63,9 @@ import java.util.UUID;
  * that touches a building block (planks, stairs, slabs, doors, glass, bricks, torches...)
  * or a block a player placed, and, for logs, any but a tree's: the logs joined to it must
  * touch leaves that grew there and no building block, as Masurium's rule is (a log cabin
- * is logs too). Only a person's order clears a build ({@code /tachyon clear}).
+ * is logs too). Only a person's order clears a build ({@code /tachyon clear}). Nor a block
+ * with nothing under it to catch what it drops ({@link #caught}): a bridge a bot built over
+ * a gap is one, and taking it lost the drops to the gap and the way back with them.
  *
  * <p>With none near, it goes out looking ({@link Legs}: legs of 48 blocks, 300 blocks or 3
  * minutes at most, twice an errand), looking around as it walks; a search that finds none
@@ -95,6 +98,8 @@ final class Gather extends Job {
     private static final double CLOSE_IN = 4.0;
     /** How many logs of a tree it follows, at most, to tell a tree from a building. */
     private static final int TREE_MAX = 96;
+    /** What a block drops must come to rest this far under it at most: where it looks for it ({@link #LOOT_RADIUS}). */
+    private static final int CATCH = 2;
 
     /** The kinds it breaks. */
     private final Set<Block> kinds;
@@ -112,7 +117,7 @@ final class Gather extends Job {
     private final Set<BlockPos> tried = new HashSet<>();
     private ServerLevel level;
     /** What the last look saw and left: for the words when it ends. */
-    private int buried, built, unseen;
+    private int buried, built, unseen, hanging;
     /** The kinds it carries no tool for, that make nothing drop by hand. */
     private final Set<String> noTool = new TreeSet<>();
     private int noWay, refused;
@@ -191,6 +196,7 @@ final class Gather extends Job {
         if (built > 0) s.append("; left alone ").append(built).append(" that players placed or built with");
         if (buried > 0) s.append("; ").append(buried).append(" buried, with no face to the air (that is mining)");
         if (unseen > 0) s.append("; ").append(unseen).append(" out of sight");
+        if (hanging > 0) s.append("; ").append(hanging).append(" with nothing under them to catch what they drop");
         if (noWay > 0) s.append("; ").append(noWay).append(" I could not get at");
         if (refused > 0) s.append("; ").append(refused).append(" the server would not let me break");
         if (!noTool.isEmpty()) s.append("; I carry no tool that makes ").append(String.join(", ", noTool)).append(" drop anything");
@@ -295,7 +301,7 @@ final class Gather extends Job {
             int n = look(p, now);
             if (n != 0) return true;          // some in sight (the next tick goes for one), or no look this tick
             if (!legs.out()) {
-                if (!noTool.isEmpty() && built + buried + unseen == 0) {
+                if (!noTool.isEmpty() && built + buried + unseen + hanging == 0) {
                     // What is here it cannot make drop anything, and walking on finds the same.
                     Bots.halt(p, done(b) + left());
                     return false;
@@ -393,7 +399,7 @@ final class Gather extends Job {
         Map<BlockState, Boolean> tool = new HashMap<>();
         Map<BlockPos, Boolean> trees = new HashMap<>();
         known.clear();
-        buried = built = unseen = 0;
+        buried = built = unseen = hanging = 0;
         noTool.clear();
         int sights = 0;
         for (BlockPos pos : found) {
@@ -410,6 +416,10 @@ final class Gather extends Job {
             }
             if (places.byPlayer(level, pos) || partOfBuild(level, places, pos, s, trees) || !level.mayInteract(b, pos)) {
                 built++;
+                continue;
+            }
+            if (!caught(level, pos)) {
+                hanging++;
                 continue;
             }
             if (!inTheOpen(level, pos)) {
@@ -461,6 +471,23 @@ final class Gather extends Job {
             }
         }
         return out;
+    }
+
+    /**
+     * Whether what the block drops comes to rest where it is looked for: on something within
+     * {@link #CATCH} blocks under it, or on water. Over a gap it falls out of reach: a player
+     * does not break a block to watch what it drops fall into a canyon, and a bot that took
+     * the bridge another bot had built over one (or it itself, to come) lost the drops and
+     * the way back. Lava under it burns them.
+     */
+    static boolean caught(ServerLevel level, BlockPos pos) {
+        for (int d = 1; d <= CATCH; d++) {
+            BlockPos n = pos.below(d);
+            BlockState s = level.getBlockState(n);
+            if (!s.getFluidState().isEmpty()) return s.getFluidState().is(FluidTags.WATER);
+            if (!s.getCollisionShape(level, n).isEmpty()) return true;
+        }
+        return false;
     }
 
     /** A face to the air (or to water, grass, a torch: nothing that fills the space): Masurium's "exposed". */

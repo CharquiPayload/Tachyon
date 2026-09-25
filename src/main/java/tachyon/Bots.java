@@ -1541,8 +1541,8 @@ public final class Bots {
     /**
      * A search sent to a routes thread, {@code find} run there over the loaded chunks
      * around the body and {@code to}: the snapshot taken here, with the tiles it got stuck
-     * on lately and, for a route that may dig, its break list. What it finds is walked once
-     * it comes back ({@link #adopt}).
+     * on lately and, for a route that may dig, its break list and the blocks players placed
+     * there (never dug). What it finds is walked once it comes back ({@link #adopt}).
      */
     private static void send(Bot p, BlockPos to, Route.Options wanted,
                              BiFunction<SnapshotWorld, Route.Options, Leg.Found> find, String doing) {
@@ -1552,7 +1552,7 @@ public final class Bots {
         BlockPos from = new BlockPos(body.getBlockX(), floorY(p), body.getBlockZ());
         SnapshotWorld world = SnapshotWorld.around(body.serverLevel(), from, to, MARGIN, MAX_CHUNKS)
                 .vetoing(p.stuck.now(body.level().dimension(), body.getServer().getTickCount()));
-        if (wanted.canBreak()) world.breaking(Tunnelling.blocks(p));
+        if (wanted.canBreak()) world.breaking(Tunnelling.blocks(p)).sparing(PlacedBlocks.of(body.serverLevel()));
         Route.Options options = wanted.withDeadline(SEARCH_MS);
         long took = System.nanoTime() - started;
         synchronized (STATS) {
@@ -1774,7 +1774,7 @@ public final class Bots {
         }
         t.found();
         if (f.kind() != Leg.Kind.WALK && f.kind() != Leg.Kind.BESIDE) {
-            LOG.info("[tachyon] {} at {}: {}", p.name(), Brain.pos(b.blockPosition()), f.route().reason());
+            Notices.technical(LOG, p, p.name() + " at " + Brain.pos(b.blockPosition()) + ": " + f.route().reason());
         }
         if (f.route().steps().size() < 2) {
             legOver(p, null);
@@ -1969,10 +1969,11 @@ public final class Bots {
             halt(p, "stuck at " + b.blockPosition().toShortString() + ": " + why);
             return;
         }
-        // A trip someone gave: a line in the log for each time (a follower's or a job's, a
-        // crowd's many, are not: the job says it in its words, a follower tries again).
-        LOG.info("[tachyon] {} at {}: {}; searching again without {} {} {}", p.name(), Brain.pos(b.blockPosition()), why,
-                at.x(), at.y(), at.z());
+        // A trip someone gave: a technical line for each time, for the log and a verbose
+        // owner (a follower's or a job's, a crowd's many, are not: the job says it in its
+        // words, a follower tries again).
+        Notices.technical(LOG, p, p.name() + " at " + Brain.pos(b.blockPosition()) + ": " + why + "; searching again without "
+                + at.x() + " " + at.y() + " " + at.z());
         halt(p, p.doing);
         Trip t = p.trip;
         t.why = why;

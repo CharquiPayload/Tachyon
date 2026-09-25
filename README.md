@@ -182,7 +182,9 @@ the way, and told back once it is over.
   operator changes it (`/tachyon break <who> allow|forbid|default <block>`); its
   brain reads it (`break_permissions`) and cannot change it. It is looked at again
   on each block as it is dug, and it rules only what the bot breaks on its own to
-  make its way: what it is told to break (`clear`) never needed it.
+  make its way: what it is told to break (`clear`) never needed it. Whatever the
+  list says, it never digs a block a player placed ([Gathering](#gathering) says
+  how the server knows them): a player's build is broken only on a person's order.
 
 ## Death, restarts and the night
 
@@ -380,7 +382,9 @@ stairs, slabs, doors, wool, fences, walls, trapdoors, beds, signs, glass, bricks
 torches, lanterns, chests, crafting tables, furnaces) or a block a player placed;
 and logs that are not a tree's (the logs joined to it must touch leaves that grew
 there and no building block: a log cabin is logs too). Only a person's
-`/tachyon clear` breaks a build.
+`/tachyon clear` breaks a build. Nor does it take a block with nothing under it,
+2 blocks down at most, to catch what it drops: what falls into a gap is lost,
+and a bridge a bot built over one is the way back.
 
 It stops when it has enough, when its backpack is full, when it carries no tool
 that makes those blocks drop anything, or when a search finds none; every way it
@@ -389,7 +393,11 @@ ends says how many it got, and what it left alone and why: `gathered 16 dirt
 anything`, `broke 2 of 4 sand; I saw no more sand in the open: I looked 300
 blocks to the east; left alone 12 that players placed or built with`. Several
 bots gathering together share what is around, each taking the block it goes for.
-What it gathers is not its trash meanwhile (dirt is on the list).
+What it gathers is not its trash meanwhile (dirt is on the list). Its walks to the
+blocks go as every walk does ([Getting there](#getting-there)): with
+`break_to_advance` on they may dig through blocks on its break list, never one a
+player placed; they do not build, since bridges and towers are for trips and for
+following.
 
 ## What it does by itself
 

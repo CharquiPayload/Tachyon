@@ -18,6 +18,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.material.FluidState;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -37,7 +38,8 @@ import java.util.Set;
  * decide it. Two things of the bot's own go with a snapshot, copied as it is taken, so the
  * search thread reads them without touching the bot: the tiles it got stuck on lately
  * ({@link #vetoing}: not stood on, except where it stands now), and the blocks it may break
- * on its own to get through ({@link #breaking}: its break list, for a route that digs).
+ * on its own to get through ({@link #breaking}: its break list, for a route that digs), with
+ * the blocks players placed in its chunks, which it never digs ({@link #sparing}).
  */
 final class SnapshotWorld implements World, BlockGetter {
 
@@ -51,6 +53,8 @@ final class SnapshotWorld implements World, BlockGetter {
     private Set<Long> vetoed = Set.of();
     /** The blocks it may break on its own to get through; none unless a route may dig. */
     private Set<Block> mayBreak = Set.of();
+    /** The blocks players placed, by chunk, sorted ({@link PlacedBlocks.Places#inChunk}): never dug through. */
+    private Map<Long, long[]> placed = Map.of();
 
     private SnapshotWorld(Map<Long, LevelChunk> chunks, int minY, int height) {
         this.chunks = chunks;
@@ -108,6 +112,22 @@ final class SnapshotWorld implements World, BlockGetter {
      */
     SnapshotWorld breaking(Set<Block> blocks) {
         this.mayBreak = blocks;
+        return this;
+    }
+
+    /**
+     * The blocks players placed in its chunks, which a route never digs through whatever its
+     * break list says: a player's build is broken only on a person's order. Only for a route
+     * that digs; as it is taken, on the server's thread. What it keeps are the level's own
+     * arrays, which are never written after they are handed out, so nothing is copied.
+     */
+    SnapshotWorld sparing(PlacedBlocks.Places places) {
+        Map<Long, long[]> out = new HashMap<>();
+        for (long chunk : chunks.keySet()) {
+            long[] in = places.inChunk(chunk);
+            if (in != null) out.put(chunk, in);
+        }
+        this.placed = out;
         return this;
     }
 
@@ -206,8 +226,8 @@ final class SnapshotWorld implements World, BlockGetter {
 
     /**
      * Whether a route may go through this block by breaking it: solid, not unbreakable
-     * (bedrock, barriers), and on the bot's break list. Asked only by a search that may dig,
-     * and only of blocks already in the way of a step.
+     * (bedrock, barriers), on the bot's break list, and not placed by a player. Asked only by
+     * a search that may dig, and only of blocks already in the way of a step.
      */
     @Override
     public boolean breakable(int x, int y, int z) {
@@ -215,6 +235,8 @@ final class SnapshotWorld implements World, BlockGetter {
         aux.set(x, y, z);
         BlockState state = read(aux);
         if (!mayBreak.contains(state.getBlock())) return false;
+        long[] built = placed.get(ChunkPos.asLong(x >> 4, z >> 4));
+        if (built != null && Arrays.binarySearch(built, BlockPos.asLong(x, y, z)) >= 0) return false;
         try {
             return state.getDestroySpeed(this, aux) >= 0;
         } catch (RuntimeException e) {
