@@ -41,9 +41,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * before it comes back ({@link #back}): a turn is about a bot that can do something.
  *
  * <p>An order given in the chat that is over by itself (done, or given up) is news: the
- * brain is told, with no tools, and says how it went to whoever gave it. What an ability
- * notices (hunger, a reminder due) is a notice ({@link #notice}): the brain is told, with
- * its tools, and what it starts is told to its owner.
+ * brain is told, with no tools, and says how it went to whoever gave it. What its body has
+ * to tell its owner unasked (its things got back after a death, a player hitting it) is a
+ * report ({@link #report}, through {@link Notices}): told the same way, with no tools, in
+ * one call. What an ability notices (hunger, a reminder due) is a notice ({@link #notice}):
+ * the brain is told, with its tools, and what it starts is told to its owner.
  */
 final class Brain {
 
@@ -81,7 +83,9 @@ final class Brain {
         /** What came of an order {@code who} gave it: told, with no tools. */
         NEWS,
         /** Something an ability noticed: told, with its tools, on its owner's behalf. */
-        NOTICE
+        NOTICE,
+        /** What its body has to tell its owner unasked ({@link Notices}): told, with no tools, as news is. */
+        REPORT
     }
 
     /** Said to it, or news, or a notice; {@code who} is the one it answers (null: the console, or nobody). */
@@ -177,6 +181,23 @@ final class Brain {
         thinking = THINK.submit(() -> think(n));
     }
 
+    /**
+     * What its body has to tell its owner unasked, in words for the model (see
+     * {@link Notices#say}, which decides whether it is said, and how): its brain tells them
+     * in its own words, in one call with no tools, as it tells news of an order. It waits
+     * with the notices while it thinks. On the server's thread.
+     */
+    void report(String text) {
+        if (config().url(p.name()).isEmpty()) return;
+        Said r = new Said(p.owner, p.ownerName == null ? "nobody" : p.ownerName, text, Kind.REPORT);
+        if (waits()) {
+            if (notices.size() >= NOTICES_MAX) notices.removeFirst();
+            notices.addLast(r);
+            return;
+        }
+        thinking = THINK.submit(() -> think(r));
+    }
+
     void stop() {
         if (thinking != null) thinking.cancel(true);
         waiting = null;
@@ -210,14 +231,17 @@ final class Brain {
                         + ". Tell them how it went, in one short sentence, in the language they write to you in:"
                         + " only what this says happened, nothing more.)";
                 case NOTICE -> "(Nobody spoke: a notice. " + said.text() + ")";
+                case REPORT -> "(Nobody spoke: news from your own body, for " + said.name() + ", your owner: "
+                        + said.text() + ". Tell " + said.name() + " in one or two short sentences, in the language"
+                        + " they write to you in, in your own words: only what this says, nothing more.)";
                 case WORDS -> said.name() + ": " + said.text();
             };
             msgs.add(message("user", "[" + start.state() + "]\n" + heard));
             int from = msgs.size();
 
             String answer = "";
-            // News is only told: no tools, so the first answer is words.
-            int steps = said.kind() == Kind.NEWS ? 0 : cfg.steps();
+            // News and reports are only told: no tools, so the first answer is words (one call).
+            int steps = said.kind() == Kind.NEWS || said.kind() == Kind.REPORT ? 0 : cfg.steps();
             for (int step = 0; ; step++) {
                 // The last step has no tools: whatever was done, it answers in words.
                 Llm.Reply r = llm.ask(msgs, step < steps ? start.tools() : new JsonArray());
@@ -255,7 +279,10 @@ final class Brain {
             failure = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             LOG.warn("[tachyon] {} could not think", name, e);
             String why = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            server.execute(() -> tell(said.who(), name + " could not think: " + why));
+            // A report is still told, in its plain words: what the body had to say is not lost with the model.
+            String line = said.kind() == Kind.REPORT ? name + ": " + said.text() + " (its brain could not say it: " + why + ")"
+                    : name + " could not think: " + why;
+            server.execute(() -> tell(said.who(), line));
         } finally {
             server.execute(this::next);
         }

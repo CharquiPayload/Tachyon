@@ -13,8 +13,9 @@ anything, and no bot needs a Minecraft account or a game client of its own.
 
 **Early days (0.2.0).** It walks, follows, hunts, clears areas and talks; it
 fights with a sword and a bow, wears armor, eats, and tosses what it does not
-need; it comes back when it dies and when the server restarts; its settings have
-an in-game menu; most of what a player does is still to come.
+need; it comes back when it dies (and goes back for what it dropped) and when
+the server restarts; its settings have an in-game menu; most of what a player
+does is still to come.
 
 ## Installing
 
@@ -71,9 +72,23 @@ Ada?`. It answers in the chat, in the language it was spoken to in, and does wha
 it can with its tools: come to you, follow, go somewhere, stop, hunt, kill with
 its bow, hit what is near, clear a box, put something in its hand, put on or take
 off armor, eat, toss things (to you, too), change its trash list, tell how it is,
-look around. When something it was asked is over (done, or
-given up), it says so, in its words. Each player can speak to bots a few times a
-minute (`per_minute`).
+look around, tell where and how it last died. When something it was asked is
+over (done, or given up), it says so, in its words. Each player can speak to bots
+a few times a minute (`per_minute`).
+
+**What it tells you unasked.** A bot also tells its owner what nobody asked
+about: how going back for its things after a death went, a player who keeps
+hitting it. Its `notices` setting says how: `brain` (the default), its brain
+says it in the chat in its own words (one call to its model, as when it tells
+how an order went); `plain`, a line to its owner only (`[tachyon] Ada: got back
+all 230 items it dropped when it died at 12 64 -30`), no call; `off`, nothing. A
+bot with no brain set up says it plainly. Each kind of notice is said once every
+10 minutes at most, and only while its owner is in the game.
+
+**A player who keeps hitting it** (3 hits in a row, each within 20 s of the one
+before) is told to its owner: `Steve hit it 3 times in 6 s (7 health lost); it
+has not hit back`. It never hits back. Hits from a player it hit first are left
+out: that fight is its own.
 
 ## Death, restarts and the night
 
@@ -81,7 +96,8 @@ minute (`per_minute`).
 "respawn" does: at its bed or respawn anchor if it set one and it is still
 there, else at the world's spawn; whole (health, food, air, no fire, no
 effects), with whatever it was doing dropped, and still the same bot (its owner,
-settings, data and brain). What it carried stays where it died. An order given to
+settings, data and brain). What it carried stays where it died (it goes back for
+it: see below). An order given to
 it in those 2 seconds, and what is said to it, it takes up once it is back; a bot
 that follows it waits, and follows it again. A bot that dies
 over and over (in lava, or where something kills it as soon as it is back) comes
@@ -90,6 +106,23 @@ back 5 times in 5 minutes at most: the 6th time, it leaves the game instead. Wit
 its owner, if online, gets a line: `[tachyon] Ada died (Ada was slain by Zombie)
 and is back at 12 64 -30`, or `... and left: 5 deaths in 5 minutes`. A bot that
 left is brought back with `spawn`, whole, as a respawn would bring it.
+
+**It goes back for what it dropped**, by itself, 2 seconds after it is back (what
+a player drops at a death vanishes after 5 minutes): it walks to where it died
+and picks up its own things lying within 12 blocks of it, until it sees none it
+can reach; then its owner hears how it went, with the numbers (`got back 212 of
+the 230 items it dropped when it died at 12 64 -30; 18 were gone (vanished, or
+taken by someone)`). It tries twice at most for one place, within about 6
+minutes of the death; never after a death in lava (it all burned), in the void
+or by drowning (it lies under the water that drowned it); and only in the
+dimension it came back in (crossing to another comes later). Any order given to
+it ends the trip, and it says what it left behind. With `recover_items` false it
+does not go.
+
+**It remembers its last death**, in its data: where, how (the chat's line, who
+killed it), when, what it dropped and what came of it, and how many times it has
+died. Its brain knows for 10 minutes after, and asks for it any time with its
+`last_death` tool.
 
 **When the server stops**, the bots in the game are recorded with the world
 (`<world>/tachyon/roster.json`: name, dimension, position, rotation), and once it
@@ -198,7 +231,8 @@ model).
 
 ## Settings
 
-Settings are switches and numbers that say how a bot goes about what it does.
+Settings are switches, numbers and choices that say how a bot goes about what it
+does.
 The easiest way to change them is the [config menu](#the-config-menu); the
 commands do the same: `/tachyon settings <who>` lists a bot's, each with its
 value and where that comes from, and `/tachyon set <who> <key> <value>` changes
@@ -209,8 +243,10 @@ one.
 | `sprint` | Sprint when walking | Walking | basic | owner, operators | `true` | whether it may sprint when walking |
 | `respawn` | Come back after dying | Life | basic | owner, operators | `true` | whether it comes back by itself when it dies (5 times in 5 minutes at most); false: it leaves the game |
 | `come_back` | Come back after a restart | Life | basic | owner, operators | `true` | whether it comes back by itself, where it was, when the server starts again |
+| `recover_items` | Go back for its things | Life | basic | owner, operators | `true` | whether it goes back for what it dropped when it died, once it is back (2 tries within 6 minutes of the death at most; never after lava, the void or drowning) |
 | `ignore_for_sleep` | Left out of sleeping | Night | basic | operators | `true` | whether the players skip the night without it (it does not count for the sleeping percentage) and no phantoms spawn because of it |
 | `brain_lite` | Lite brain | Brain | advanced | owner, operators | `false` | whether its brain is sent only the core tools, for a small local model ([The brain](#the-brain)) |
+| `notices` | Notices to its owner | Brain | basic | owner, operators | `brain` | how it tells its owner what nobody asked about (how going back for its things went, a player hitting it): brain, in its own words (a call to its model); plain, a fixed line; off, not at all ([Talking to a bot](#talking-to-a-bot)) |
 | `dress_alone` | Put on better armor | Gear | basic | owner, operators | `true` | whether it puts on better armor it carries by itself (it looks every 10 s) |
 | `trash_at_once` | Toss trash at once | Gear | advanced | owner, operators | `false` | whether it tosses its trash as soon as it picks it up; false: only when its backpack is full ([Tossing](#tossing-and-trash)) |
 | `hunt_players` | Fight players by name | Fighting | advanced | operators | `false` | whether its brain's attack and kill may go after a player named to them |
@@ -236,7 +272,8 @@ mod's default`. `/tachyon defaults` lists the server's defaults the same way.
 A bot's owner and operators may change its settings; a few are only the
 operators' (the table says which). A switch takes `true` or `false` (or `on`,
 `off`, `yes`, `no`); a number, plain digits within its range, and one out of it
-is refused with the range.
+is refused with the range; a choice, one of its options by name (`notices plain`),
+and anything else is refused with the options.
 
 ## The config menu
 
@@ -256,6 +293,8 @@ from and how to change it:
 - a number is a clock, whose stack shows the value when it is a whole one from 1
   to 99 (the text under it always says it): left click +1, right click -1, with
   shift 10 at a time, kept within its range;
+- a choice is a name tag, the options listed under it: left click the next
+  option, right click the one before, going round;
 - **Q** over a setting puts it back to the default (clears the bot's own value,
   or on the Server defaults page the one set in game);
 - a setting only operators may change shows to others as a barrier, saying so.
@@ -296,8 +335,9 @@ Some examples:
 
 The model has to support tool calling. A small local model chooses badly among
 many tools: `/tachyon set <who> brain_lite true` sends it only the core ones
-(walking, stopping, hunting, clearing, how it is, what is around), and not those
-for killing, attacking, its hands, armor, food and tossing.
+(walking, stopping, hunting, clearing, how it is, what is around), and not the
+others: those for killing, attacking, its hands, armor, food and tossing,
+`last_death`, and most of those still to come.
 
 Any of `url`, `model`, `key` and `timeout` can be set for one bot only, as
 `<name>.<key>` (`Ada.model=...`). The key is read from this file and nowhere

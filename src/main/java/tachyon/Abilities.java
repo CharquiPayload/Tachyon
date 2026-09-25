@@ -45,7 +45,10 @@ final class Abilities {
             new Dressing(),
             new Fighting(),
             new Eating(),
-            new Tossing());
+            new Tossing(),
+            new Notices(),
+            new Recovering(),
+            new Complaining());
 
     /** The brain's tools: every ability's, gathered once. The model is sent them in this order. */
     private static final Tools TOOLS = new Tools();

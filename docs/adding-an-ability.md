@@ -282,6 +282,18 @@ made Masurium's since); new tools come among them without touching them.
 
 Besides its tools, an ability can reach a bot's brain (`Bots.brain(p)`):
 
+- **`Notices.say(p, kind, text)`**: something its owner is to hear of that
+  nobody asked about (how going back for its things went, a player hitting
+  it). Its `notices` setting decides how: its brain says it in its own words
+  (one call to its model, no tools, as it tells how an order went), a plain
+  line to its owner, or nothing. It takes care of the brakes: each `kind` once
+  every 10 minutes per bot (put the detail in the kind when two cases must both
+  be told: `hit:Steve`, `hit:Alex`), and only while its owner is in the game.
+  `text` says what happened, about the bot without naming it and with the
+  numbers, as a finished order's line does ("got back 12 of the 14 items it
+  dropped when it died at 10 64 -3"), with no period at the end: its owner may
+  read it as it is. This is the way for a body to speak up; the next one is for
+  what the brain is to act on.
 - **`brain.notice(text)`**: something it noticed (hungry, hurt, a reminder
   due), in words for the model: what happened, and what it may do ("You are
   hungry (food 5/20): eat if you carry food; tell your owner only if you
@@ -299,9 +311,9 @@ Every word added here is sent, and paid for, on every turn of every bot.
 
 ## Settings
 
-A setting is a switch or a number that says how a bot goes about what it does,
-with a value of its own for each bot. Declare it, with the words the config menu
-shows it with:
+A setting is a switch, a number, or a choice among a few named options, that
+says how a bot goes about what it does, with a value of its own for each bot.
+Declare it, with the words the config menu shows it with:
 
 ```java
 static final String TORCHES = "torches";
@@ -312,6 +324,9 @@ public void settings(Settings settings) {
             .label("Light tunnels").group("Mining").basic();
     settings.number("follow_gap", 3, 1, 10, "how far it keeps from whom it follows", Settings.Who.OWNER)
             .label("Following distance").group("Walking").advanced();
+    settings.choice("tunnel", "straight", List.of("straight", "stairs", "spiral"),
+            "how it digs down: straight, stairs or a spiral", Settings.Who.OWNER)
+            .label("Way down").group("Mining").advanced();
 }
 ```
 
@@ -320,7 +335,13 @@ and read it where the code decides, on the server's thread:
 ```java
 if (Settings.bool(p, Mining.TORCHES)) ...
 double gap = Settings.number(p, "follow_gap");
+if (Settings.choice(p, "tunnel").equals("stairs")) ...
 ```
+
+A choice is for more than two ways of doing one thing; its options are lower
+case words, as a player types them (`/tachyon set Ada tunnel stairs`), kept in
+the bot's data by name, and the menu goes through them in the order declared.
+Two options are a switch.
 
 - **Keys** are lower case, digits and `_`, and never change once released:
   they are in the bots' saved data, in `defaults.json` and in
@@ -336,7 +357,7 @@ double gap = Settings.number(p, "follow_gap");
   say, 32 characters at most ("Come back after dying", not "respawn toggle").
 - **The group** puts it in a row with the settings of the same kind: a word or
   two, spelled exactly as the others of that kind spell it ("Walking", "Life",
-  "Night", "Brain"), or it is a group of its own. Groups are shown in the order
+  "Night", "Brain", "Gear", "Fighting"), or it is a group of its own. Groups are shown in the order
   their first setting was declared, that is the abilities' order.
 - **The level**: `.basic()` for what most owners will want to change, shown
   first; `.advanced()` for the rest, behind the menu's "Advanced" button. The

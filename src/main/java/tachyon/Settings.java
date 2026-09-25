@@ -33,8 +33,9 @@ import java.util.function.Function;
 import java.util.regex.Pattern;
 
 /**
- * The switches and numbers the abilities declare, which say how a bot goes about what it
- * does (whether it sprints, say), each bot with values of its own.
+ * The switches, numbers and choices the abilities declare, which say how a bot goes about
+ * what it does (whether it sprints, say, or how it tells its owner things), each bot with
+ * values of its own.
  *
  * <p>Four layers; a bot's value is the first of them that has one:
  * <ol>
@@ -50,8 +51,9 @@ import java.util.regex.Pattern;
  * with it: its owner (and operators), or operators only. So are the words the menu shows
  * it with: a label, a group, and a level (basic, shown first; advanced, behind a button).
  *
- * <p>The code reads them with {@link #bool(Bots.Bot, String)} and
- * {@link #number(Bots.Bot, String)}, on the server's thread, as a bot's data is. A read is
+ * <p>The code reads them with {@link #bool(Bots.Bot, String)},
+ * {@link #number(Bots.Bot, String)} and {@link #choice(Bots.Bot, String)}, on the server's
+ * thread, as a bot's data is. A read is
  * a lookup in the bot's data, then, when it has no value of its own, one in the defaults
  * set in game, then one in tachyon.properties' defaults, parsed once and kept until
  * {@code /tachyon brain reload}. A number read is always within its range: one out of it (a
@@ -109,8 +111,12 @@ final class Settings {
     }
 
     /**
-     * One setting, as declared: a switch (true or false), or a number within its range.
-     * Values are held as numbers either way: a switch's are 1 and 0.
+     * One setting, as declared: a switch (true or false), a number within its range, or a
+     * choice among a few named options ("brain", "plain", "off"). Values are held as numbers
+     * all the same: a switch's are 1 and 0, a choice's the place of its option in the list
+     * (from 0), so that the layers, the ranges and the menu work alike for the three. What
+     * is kept in a bot's data, and said, is the words: true or false, the number, the
+     * option's name.
      *
      * <p>Its words for the menu are given as it is declared, one after another:
      * {@code settings.bool(...).label("Sprint when walking").group("Walking").basic()}. They
@@ -120,6 +126,8 @@ final class Settings {
     static final class Setting {
         final String key;
         final boolean isSwitch;
+        /** A choice's options, in order: its values are their places in it. Empty for a switch or a number. */
+        final List<String> options;
         final double byDefault, min, max;
         /** What it decides, as "whether it may sprint when walking". */
         final String description;
@@ -131,9 +139,11 @@ final class Settings {
         /** Whether the menu shows it first, or behind the "Advanced" button. */
         Level level;
 
-        private Setting(String key, boolean isSwitch, double byDefault, double min, double max, String description, Who who) {
+        private Setting(String key, boolean isSwitch, List<String> options, double byDefault, double min, double max,
+                        String description, Who who) {
             this.key = key;
             this.isSwitch = isSwitch;
+            this.options = List.copyOf(options);
             this.byDefault = byDefault;
             this.min = min;
             this.max = max;
@@ -168,25 +178,35 @@ final class Settings {
             return this;
         }
 
+        /** Whether it is a choice among named options (then {@link #options} has them). */
+        boolean isChoice() {
+            return !options.isEmpty();
+        }
+
         /**
-         * A value in words: true or false, or the number, in plain digits (a whole one
-         * without its ".0"). Never Java's "1.0E-4": the menu turns a number it changed into
-         * words and back through {@link #parse}, which takes plain digits only, as a player
-         * types them.
+         * A value in words: true or false, a choice's option, or the number, in plain
+         * digits (a whole one without its ".0"). Never Java's "1.0E-4": the menu turns a
+         * number it changed into words and back through {@link #parse}, which takes plain
+         * digits only, as a player types them.
          */
         String words(double v) {
             if (isSwitch) return v != 0 ? "true" : "false";
+            if (isChoice()) return options.get((int) Math.round(clamp(v)));
             if (v == Math.rint(v) && Math.abs(v) < 1e15) return String.valueOf((long) v);
             return BigDecimal.valueOf(v).stripTrailingZeros().toPlainString();
         }
 
         /** What it takes, in words, for a refusal. */
         String takes() {
-            return isSwitch ? key + " is true or false (or default)"
-                    : key + " is a number from " + words(min) + " to " + words(max) + " (or default)";
+            if (isSwitch) return key + " is true or false (or default)";
+            if (isChoice()) return key + " is one of " + String.join(", ", options) + " (or default)";
+            return key + " is a number from " + words(min) + " to " + words(max) + " (or default)";
         }
 
-        /** Words as a value (a number in or out of its range), or null when they are none. */
+        /**
+         * Words as a value (a number in or out of its range, a choice's option by its name,
+         * in any case), or null when they are none.
+         */
         Double parse(String text) {
             String t = text.trim().toLowerCase(Locale.ROOT);
             if (isSwitch) {
@@ -195,6 +215,10 @@ final class Settings {
                     case "false", "off", "no" -> 0.0;
                     default -> null;
                 };
+            }
+            if (isChoice()) {
+                int i = options.indexOf(t);
+                return i < 0 ? null : (double) i;
             }
             return NUMBER.matcher(t).matches() ? Double.valueOf(t) : null;
         }
@@ -212,7 +236,18 @@ final class Settings {
             if (!e.isJsonPrimitive()) return null;
             JsonPrimitive v = e.getAsJsonPrimitive();
             if (isSwitch) return v.isBoolean() ? (v.getAsBoolean() ? 1.0 : 0.0) : null;
+            // A choice is kept by its option's name: an option added later, or the list
+            // reordered, does not change what a bot had chosen.
+            if (isChoice()) return v.isString() ? parse(v.getAsString()) : null;
             return v.isNumber() ? clamp(v.getAsDouble()) : null;
+        }
+
+        /** A value as it is kept in a bot's data (or in defaults.json): true or false, the option's name, the number. */
+        JsonPrimitive kept(double v) {
+            if (isSwitch) return new JsonPrimitive(v != 0);
+            if (isChoice()) return new JsonPrimitive(words(v));
+            if (v == Math.rint(v) && Math.abs(v) < 1e15) return new JsonPrimitive((long) v);
+            return new JsonPrimitive(v);
         }
     }
 
@@ -240,7 +275,7 @@ final class Settings {
 
     /** A switch. */
     Setting bool(String key, boolean byDefault, String description, Who who) {
-        return declare(new Setting(key, true, byDefault ? 1 : 0, 0, 1, description, who));
+        return declare(new Setting(key, true, List.of(), byDefault ? 1 : 0, 0, 1, description, who));
     }
 
     /** A number, from {@code min} to {@code max}. */
@@ -248,7 +283,27 @@ final class Settings {
         if (!(min <= byDefault && byDefault <= max)) {
             throw new IllegalArgumentException("setting " + key + ": its default " + byDefault + " is not within " + min + " to " + max);
         }
-        return declare(new Setting(key, false, byDefault, min, max, description, who));
+        return declare(new Setting(key, false, List.of(), byDefault, min, max, description, who));
+    }
+
+    /**
+     * A choice among a few named options, {@code byDefault} one of them: the way something
+     * is done when there are more than two ("brain", "plain", "off"). Each option is a
+     * lower case word, as a player types it; the menu goes through them in this order. Keep
+     * them few: each is a word a player has to understand.
+     */
+    Setting choice(String key, String byDefault, List<String> options, String description, Who who) {
+        if (options.size() < 2) throw new IllegalArgumentException("setting " + key + ": a choice has two options at least");
+        for (String o : options) {
+            if (!KEY.matcher(o).matches() || o.equals("default")) {
+                throw new IllegalArgumentException("setting " + key + ": its option " + o
+                        + " is not a lower case word (or is default, which means the server's)");
+            }
+        }
+        if (Set.copyOf(options).size() != options.size()) throw new IllegalArgumentException("setting " + key + ": an option twice");
+        int at = options.indexOf(byDefault);
+        if (at < 0) throw new IllegalArgumentException("setting " + key + ": its default " + byDefault + " is none of " + options);
+        return declare(new Setting(key, false, options, at, 0, options.size() - 1, description, who));
     }
 
     // Mistakes of ours, said as the server starts.
@@ -314,7 +369,7 @@ final class Settings {
     static boolean bool(Bots.Bot p, String key) {
         Settings all = Abilities.settings();
         Setting s = all.declared(key);
-        if (!s.isSwitch) throw new IllegalArgumentException("setting " + key + " is a number, not a switch");
+        if (!s.isSwitch) throw new IllegalArgumentException("setting " + key + " is not a switch");
         return all.value(p.data, s) != 0;
     }
 
@@ -322,8 +377,16 @@ final class Settings {
     static double number(Bots.Bot p, String key) {
         Settings all = Abilities.settings();
         Setting s = all.declared(key);
-        if (s.isSwitch) throw new IllegalArgumentException("setting " + key + " is a switch, not a number");
+        if (s.isSwitch || s.isChoice()) throw new IllegalArgumentException("setting " + key + " is not a number");
         return all.value(p.data, s);
+    }
+
+    /** A choice's option for the bot, by its name, as declared: compare it with the names the ability declared. */
+    static String choice(Bots.Bot p, String key) {
+        Settings all = Abilities.settings();
+        Setting s = all.declared(key);
+        if (!s.isChoice()) throw new IllegalArgumentException("setting " + key + " is not a choice");
+        return s.words(all.value(p.data, s));
     }
 
     private Setting declared(String key) {
@@ -448,9 +511,7 @@ final class Settings {
         }
         Double v = s.parse(text);
         if (v == null || !s.within(v)) return s.takes();
-        if (s.isSwitch) own.addProperty(s.key, v != 0);
-        else if (v == Math.rint(v) && Math.abs(v) < 1e15) own.addProperty(s.key, (long) (double) v);
-        else own.addProperty(s.key, v);
+        own.add(s.key, s.kept(v));
         data.changed();
         return null;
     }
@@ -592,13 +653,15 @@ final class Settings {
                 .filter(s -> operator || s.who == Who.OWNER).map(s -> s.key), b);
     }
 
-    /** A switch's true and false; a number's ends and default; and default. */
+    /** A switch's true and false; a choice's options; a number's ends and default; and default. */
     private static CompletableFuture<Suggestions> values(CommandContext<CommandSourceStack> c, SuggestionsBuilder b) {
         Setting s = Abilities.settings().get(StringArgumentType.getString(c, "key"));
         List<String> words = new ArrayList<>();
         if (s != null && s.isSwitch) {
             words.add("true");
             words.add("false");
+        } else if (s != null && s.isChoice()) {
+            words.addAll(s.options);
         } else if (s != null) {
             words.add(s.words(s.min));
             words.add(s.words(s.byDefault));

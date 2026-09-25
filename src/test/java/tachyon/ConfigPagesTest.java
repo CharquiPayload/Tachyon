@@ -311,6 +311,37 @@ class ConfigPagesTest {
         assertEquals(1, fine.value(ada.data(), fine.get("tiny")));
     }
 
+    @Test
+    @DisplayName("a choice is a name tag listing its options: left click the next, right click the one before, going round; Q its default")
+    void choiceClicks() {
+        Settings named = new Settings(key -> null);
+        named.choice("notices", "brain", List.of("brain", "plain", "off"), "how it tells its owner", Settings.Who.OWNER)
+                .label("Notices").group("Brain").basic();
+        pages = new ConfigPages(named, () -> operator, () -> List.copyOf(bots));
+        pages.start();
+        assertEquals(ConfigPages.Icon.CHOICE, at(1).icon());
+        assertEquals("Notices", at(1).name());
+        assertEquals(List.of("How it tells its owner.", "", "Value: brain", "Options: brain, plain, off",
+                "From: the mod's default", "", "Left click: plain, right click: off", "Q: back to the default (brain)"),
+                lore(at(1)));
+        List<String> seen = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            assertEquals(ConfigPages.Kind.CHANGED, click(1, ConfigPages.Click.LEFT));
+            seen.add(named.get("notices").words(named.value(ada.data(), named.get("notices"))));
+        }
+        assertEquals(List.of("plain", "off", "brain", "plain"), seen, "the next each time, and round again");
+        assertEquals(ConfigPages.Kind.CHANGED, click(1, ConfigPages.Click.RIGHT));
+        assertEquals(ConfigPages.Kind.CHANGED, click(1, ConfigPages.Click.SHIFT_RIGHT));
+        assertEquals("off", named.get("notices").words(named.value(ada.data(), named.get("notices"))),
+                "plain, then brain, then round to off: shift is the same click");
+        assertTrue(lore(at(1)).contains("Value: off"));
+        assertTrue(lore(at(1)).contains("From: its own"));
+        assertEquals("\"off\"", ada.data().section(Settings.SECTION).get("notices").toString(), "kept by its name");
+        assertEquals(ConfigPages.Kind.CHANGED, click(1, ConfigPages.Click.DROP));
+        assertNull(named.own(ada.data(), named.get("notices")));
+        assertEquals(1, at(1).count());
+    }
+
     // --- the pick -------------------------------------------------------------------------------
 
     @Test
