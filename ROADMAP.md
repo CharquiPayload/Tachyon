@@ -70,15 +70,22 @@ do, rebuilt to run on the server, and adds things only a server can do.
 
 ## In progress
 
-- **Hordes** come next (see Next).
+- **Hordes.** Many bots with one brain: an army that follows a general, or a
+  mindless horde. A headquarters with chests of gear, and wars between hordes.
 
 ## Next
 
-- **Hordes.** Many bots with one brain: an army that follows a general, or a
-  mindless horde. A headquarters with chests of gear, and wars between hordes.
-- **Moving further.** Portals between dimensions, horses and leads.
+- **Moving further.** Portals between dimensions and leads. Horses: mounting,
+  riding, and getting off when a horse is in the way (a one-block gap, a
+  door, something to build).
+- **Moving with style.** Bunny hops on long straight runs, measured to be
+  faster and never taken off just before a step. Parkour jumps instead of
+  building where a jump will do, and jumping while it builds where one won't.
+  Water-bucket landings from falls that would hurt.
+- **More weapons.** Shields, crossbows and tridents, with the bow's real aim.
 - **Items.** Crafting with every loaded recipe, mods included. Furnaces.
-  Chests the bot remembers, with their owners' permissions.
+  Chests the bot remembers, with their owners' permissions. The lists of food
+  it may eat and blocks it may break on its own, editable from the menu.
 - **Mining and building.** Strip mining that follows veins, staircases,
   torches, filling areas, and blueprints built layer by layer.
 - **Farms and animals.** Sowing with irrigation, harvesting, fishing,
@@ -91,6 +98,11 @@ do, rebuilt to run on the server, and adds things only a server can do.
   bot, and status commands.
 - **Outside brains.** A generic way in for an outside agent to drive a bot.
   The bridges to specific agents live outside this repository.
+- **Expansions.** A stable, documented way for separate jars to add
+  abilities, brain tools and settings.
+- **Skins.** A bot can wear a player's skin, by account name. When another
+  skin mod is installed, Tachyon leaves the skin to it; making the two work
+  together is a job for an expansion.
 
 ## Later
 
