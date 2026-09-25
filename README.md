@@ -120,14 +120,14 @@ Before every hit it takes the best weapon it carries, from its hotbar or brought
 up from its backpack: a real weapon (a sword, an axe, a trident, a mace) before
 any tool, then the most damage per second, from the item's own numbers (a mod's
 weapons count as they hit). A weapon brought up takes the hotbar slot of the
-weakest weapon there, else an empty one, else that of a small stack of something
-of little use.
+weakest weapon there, if the new one is better, else an empty one, else that of
+a small stack of something of little use.
 
 With `dress_alone` (on by default) it puts on, every 10 seconds, any armor it
 carries that protects better than what it wears (armor points, then toughness),
-the old piece going where the new one was; never a piece with the curse of
-binding off. Its brain can ask it to put on the best it carries, or one piece
-(even a worse one), or take one off into its backpack.
+the old piece going where the new one was; a piece with the curse of binding
+stays on. Its brain can ask it to put on the best it carries, or one piece (even
+a worse one), or take one off into its backpack.
 
 ### Hunting and killing
 
@@ -190,11 +190,11 @@ taken), and then only: cobblestone, cobbled deepslate, tuff, granite, diorite,
 andesite, dirt and gravel, to start with. With `trash_at_once` it tosses its
 trash as soon as it picks it up. Either way it keeps one stack of each trash
 block it can build with (the one in its hand, else the biggest), and never tosses
-what it is using. Its brain may change the
-list (it concerns only what it carries), and so may its owner and operators with
-`/tachyon trash`. Its brain is told when it tossed its trash to make room, or
-found its backpack full with nothing to toss (once in 10 minutes at most: every
-word to it is a paid call to a model).
+what it is using. Its brain may change the list (it concerns only what it
+carries), and so may its owner and operators with `/tachyon trash`. Its brain is
+told when it tossed its trash to make room, or found its backpack full with
+nothing to toss (once in 10 minutes at most: every word to it is a paid call to a
+model).
 
 ## Settings
 
@@ -318,7 +318,11 @@ VMs). A tick has 50 ms (20 a second) before the server lags:
 | 100 | clearing a 40×3×40 block (4,800 blocks) | 8–12 ms | 46 ms at the busiest | 3.5–4.5 ms |
 
 About 0.02–0.06 ms of the tick and about 2 MB of memory per bot. Route searches
-and the model's answers run on threads of their own, never on the tick. A busy
+and the model's answers run on threads of their own, never on the tick. What a
+bot does by itself (armor looked at every 10 s, trash on a pickup, a bite or a few
+hits under way) costs next to nothing while there is nothing to do: with 100 idle
+bots, about 0.2 µs a bot a tick, and no difference `/tachyon stats` can tell (windows
+with them and without them in turn, on one server: 5.12 and 5.18 ms a tick). A busy
 modpack leaves less room than a plain server: measure yours with
 `/tachyon stats` and `/tick query`.
 

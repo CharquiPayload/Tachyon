@@ -82,10 +82,15 @@ final class Tossing implements Ability {
      */
     private static final Set<Bots.Bot> PICKED = new LinkedHashSet<>();
 
-    /** A bot's full backpack, as its brain was told of it: when, and whether it still is. */
+    /**
+     * A bot's full backpack, as its brain was told of it (when, and whether it still is), and
+     * whether it was full with nothing to toss at its last look, and when that was.
+     */
     private static final class Full {
         long toldAt = -NOTICE_MS;
         boolean told;
+        boolean stuck;
+        long lookedAt;
     }
 
     @Override
@@ -129,15 +134,21 @@ final class Tossing implements Ability {
         if (PICKED.isEmpty() || !PICKED.remove(p)) return;
         BotPlayer b = p.body;
         if (!b.isAlive()) return;
+        Full f = p.slot(Full.class, Full::new);
+        // Full with nothing to toss, it stands on what it cannot take and touches it every
+        // tick: looked at again once a second at most.
+        if (f.stuck && now - f.lookedAt < 20) return;
+        f.lookedAt = now;
         Inventory inv = b.getInventory();
         boolean full = inv.getFreeSlot() < 0;
         if (!full && !Settings.bool(p, AT_ONCE)) {
-            p.slot(Full.class, Full::new).told = false;
+            f.told = false;
+            f.stuck = false;
             return;
         }
         Map<String, Integer> tossed = tossTrash(p);
         full = inv.getFreeSlot() < 0;
-        Full f = p.slot(Full.class, Full::new);
+        f.stuck = full && tossed.isEmpty();
         if (!full) f.told = false;
         if (tossed.isEmpty() && !full) return;
         String what = words(tossed);
