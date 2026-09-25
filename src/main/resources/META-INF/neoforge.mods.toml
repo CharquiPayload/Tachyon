@@ -7,7 +7,7 @@ license = "MIT"
 
 [[mods]]
 modId = "tachyon"
-version = "0.1.0"
+version = "0.2.0"
 displayName = "Tachyon"
 description = '''Bots that live on the server: players nobody plays, with a player's body and physics, hands that hunt and break blocks, and a brain behind an AI API (OpenAI-style, Anthropic, or a local Ollama).'''
 authors = "CharquiPayload"
