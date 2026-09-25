@@ -40,7 +40,10 @@ final class Abilities {
             new Looking(),
             new Respawning(),
             new Returning(),
-            new Sleeping());
+            new Sleeping(),
+            new Notices(),
+            new Recovering(),
+            new Complaining());
 
     /** The brain's tools: every ability's, gathered once. The model is sent them in this order. */
     private static final Tools TOOLS = new Tools();

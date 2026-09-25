@@ -48,4 +48,32 @@ class RespawningTest {
         // Five minutes after the first five, all of them gone: five more.
         for (int i = 0; i < 5; i++) assertTrue(d.comesBack(5 * MINUTE + 10 + i));
     }
+
+    @Test
+    @DisplayName("what it dropped is lost after lava (or dying in it of the burning), the void (or below the world), drowning")
+    void lost() {
+        assertEquals("lava", Respawning.lost("minecraft:lava", false, false));
+        assertEquals("lava", Respawning.lost("minecraft:on_fire", true, false), "burning, in lava");
+        assertEquals("void", Respawning.lost("minecraft:out_of_world", false, true));
+        assertEquals("void", Respawning.lost("minecraft:generic_kill", false, true), "killed below the world");
+        assertEquals("drowning", Respawning.lost("minecraft:drown", false, false));
+        for (String other : new String[]{"minecraft:mob_attack", "minecraft:fall", "minecraft:on_fire", "minecraft:hot_floor",
+                "minecraft:player_attack", "minecraft:generic_kill", "unknown"}) {
+            assertEquals(null, Respawning.lost(other, false, false), other);
+        }
+    }
+
+    @Test
+    @DisplayName("a dimension and a time ago, in words")
+    void words() {
+        assertEquals("the overworld", Respawning.dimension("minecraft:overworld"));
+        assertEquals("the nether", Respawning.dimension("minecraft:the_nether"));
+        assertEquals("the end", Respawning.dimension("minecraft:the_end"));
+        assertEquals("deep dark", Respawning.dimension("somemod:deep_dark"));
+        assertEquals("40 s", Respawning.ago(40_500));
+        assertEquals("3 min", Respawning.ago(3 * MINUTE + 5_000));
+        assertEquals("119 min", Respawning.ago(119 * MINUTE));
+        assertEquals("5 h", Respawning.ago(5 * 60 * MINUTE));
+        assertEquals("0 s", Respawning.ago(-10));
+    }
 }

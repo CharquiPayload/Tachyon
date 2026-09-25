@@ -240,6 +240,83 @@ class SettingsTest {
         }
     }
 
+    // --- a choice ----------------------------------------------------------------------------
+
+    private Settings.Setting notices() {
+        return settings.choice("notices", "brain", List.of("brain", "plain", "off"), "how it tells its owner",
+                Settings.Who.OWNER).label("Notices").group("Brain").basic();
+    }
+
+    @Test
+    @DisplayName("a choice takes one of its options by name, in any case; the rest is refused with the options")
+    void choiceWords() {
+        Settings.Setting n = notices();
+        assertEquals(0, value("notices"), "its default, brain, is the first option");
+        assertEquals("brain", n.words(value("notices")));
+        assertNull(settings.set(data, "notices", "Plain"));
+        assertEquals(1, value("notices"));
+        assertEquals("plain", n.words(value("notices")));
+        assertEquals("\"plain\"", kept("notices").toString(), "kept by its name, not its place in the list");
+        assertNull(settings.set(data, "notices", " off "));
+        assertEquals("off", n.words(value("notices")));
+        String takes = "notices is one of brain, plain, off (or default)";
+        for (String bad : new String[]{"loud", "1", "0", "", "true", "brains"}) {
+            assertEquals(takes, settings.set(data, "notices", bad), bad);
+        }
+        assertEquals(2, value("notices"), "refused: unchanged");
+        assertNull(settings.set(data, "notices", "default"));
+        assertEquals(0, value("notices"));
+    }
+
+    @Test
+    @DisplayName("a choice kept by hand as something else, or as a number, is not used; a server default by name")
+    void choiceKeptAndServerDefault() {
+        notices();
+        data.section(Settings.SECTION).addProperty("notices", 2);
+        assertEquals(0, value("notices"), "a number is no option");
+        data.section(Settings.SECTION).addProperty("notices", "shout");
+        assertEquals(0, value("notices"));
+        data.section(Settings.SECTION).addProperty("notices", "OFF");
+        assertEquals(2, value("notices"), "an option's name in another case is still it");
+        data.section(Settings.SECTION).remove("notices");
+        server.setProperty("default.notices", "plain");
+        settings.forget();          // tachyon.properties read again, as brain reload does
+        assertEquals(1, value("notices"));
+        assertEquals(Settings.From.FILE, settings.from(data, settings.get("notices")));
+        server.setProperty("default.notices", "whisper");
+        settings.forget();
+        assertEquals(0, value("notices"), "a server default that is no option is not used");
+    }
+
+    @Test
+    @DisplayName("a choice's default set in game is kept by its name in defaults.json")
+    void choiceDefaultInGame() throws IOException {
+        notices();
+        game();
+        assertNull(settings.changeDefault("notices", "off", true));
+        assertEquals(2, value("notices"));
+        BotData.awaitWrites(5000);
+        JsonObject kept = JsonParser.parseString(Files.readString(dir.resolve("defaults.json"), StandardCharsets.UTF_8))
+                .getAsJsonObject();
+        assertEquals("off", kept.getAsJsonObject("settings").get("notices").getAsString());
+        assertEquals("notices is one of brain, plain, off (or default)", settings.changeDefault("notices", "on", true));
+    }
+
+    @Test
+    @DisplayName("declaring a choice: two options at least, lower case words, none twice, its default among them")
+    void choiceMistakes() {
+        assertThrows(IllegalArgumentException.class, () -> settings.choice("a", "x", List.of("x"), "one option", Settings.Who.OWNER));
+        assertThrows(IllegalArgumentException.class, () -> settings.choice("b", "x", List.of("x", "Y"), "a capital", Settings.Who.OWNER));
+        assertThrows(IllegalArgumentException.class, () -> settings.choice("c", "x", List.of("x", "x"), "twice", Settings.Who.OWNER));
+        assertThrows(IllegalArgumentException.class, () -> settings.choice("d", "z", List.of("x", "y"), "no such default", Settings.Who.OWNER));
+        assertThrows(IllegalArgumentException.class, () -> settings.choice("e", "x", List.of("x", "default"), "default", Settings.Who.OWNER));
+        assertThrows(IllegalArgumentException.class, () -> settings.choice("f", "x", List.of("x", "two words"), "a space", Settings.Who.OWNER));
+        assertNull(settings.get("a"));
+        assertTrue(notices().isChoice());
+        assertFalse(settings.get("sprint").isChoice());
+        assertFalse(settings.get("gap").isChoice());
+    }
+
     // --- the four layers ---------------------------------------------------------------------
 
     @Test
@@ -433,7 +510,7 @@ class SettingsTest {
         Set<String> declared = new HashSet<>();
         for (Settings.Setting s : mod.all()) declared.add(s.key);
         assertEquals(declared, inReadme, "every setting the mod declares has its row in the README, and no other");
-        assertEquals(List.of("Walking", "Life", "Night"), List.copyOf(mod.groups(Settings.Level.BASIC).keySet()));
+        assertEquals(List.of("Walking", "Life", "Night", "Brain"), List.copyOf(mod.groups(Settings.Level.BASIC).keySet()));
         assertEquals(List.of("Brain"), List.copyOf(mod.groups(Settings.Level.ADVANCED).keySet()));
     }
 }

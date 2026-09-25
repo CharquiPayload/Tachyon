@@ -272,6 +272,7 @@ final class ConfigMenu extends ChestMenu {
             case ON -> Items.LIME_DYE;
             case OFF -> Items.GRAY_DYE;
             case NUMBER -> Items.CLOCK;
+            case CHOICE -> Items.NAME_TAG;
             case LOCKED -> Items.BARRIER;
             case ADVANCED -> Items.REDSTONE;
             case BACK -> Items.ARROW;

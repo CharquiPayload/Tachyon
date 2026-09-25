@@ -71,6 +71,8 @@ final class ConfigPages {
         ON, OFF,
         /** A number, shown as the stack's count when it is a whole one from 1 to 99. */
         NUMBER,
+        /** A choice among named options: a click goes to the next one. */
+        CHOICE,
         /** A setting the viewer may not change. */
         LOCKED,
         ADVANCED, BACK, PREVIOUS, NEXT
@@ -390,6 +392,7 @@ final class ConfigPages {
         List<Line> lore = new ArrayList<>(text(Tone.TEXT, capital(s.description) + "."));
         lore.add(Line.BLANK);
         lore.add(new Line(Tone.VALUE, "Value: " + s.words(v)));
+        if (s.isChoice()) lore.addAll(text(Tone.TEXT, "Options: " + String.join(", ", s.options)));
         lore.add(new Line(Tone.VALUE, "From: " + from.words));
         lore.add(Line.BLANK);
         String refused = refusal(s);
@@ -399,6 +402,8 @@ final class ConfigPages {
         }
         if (s.isSwitch) {
             lore.add(new Line(Tone.HINT, "Click: turn it " + (v != 0 ? "off" : "on")));
+        } else if (s.isChoice()) {
+            lore.add(new Line(Tone.HINT, "Left click: " + s.words(cycle(s, v, 1)) + ", right click: " + s.words(cycle(s, v, -1))));
         } else {
             lore.add(new Line(Tone.HINT, "Left click: +1, right click: -1"));
             lore.add(new Line(Tone.HINT, "Shift: 10 at a time (" + s.words(s.min) + " to " + s.words(s.max) + ")"));
@@ -406,6 +411,7 @@ final class ConfigPages {
         double back = defaults ? settings.withoutGame(s) : settings.serverDefault(s);
         lore.add(new Line(Tone.HINT, "Q: back to the default (" + s.words(back) + ")"));
         if (s.isSwitch) return new Button(v != 0 ? Icon.ON : Icon.OFF, s.label, lore, 1, null);
+        if (s.isChoice()) return new Button(Icon.CHOICE, s.label, lore, 1, null);
         boolean shown = v == Math.rint(v) && v >= 1 && v <= 99;
         return new Button(Icon.NUMBER, s.label, lore, shown ? (int) v : 1, null);
     }
@@ -481,9 +487,10 @@ final class ConfigPages {
     }
 
     /**
-     * A setting changed by a click: a switch turned over by any click; a number one up (left)
-     * or down (right), ten with shift, and kept within its range; Q, back to the default.
-     * Through the same checks as the commands.
+     * A setting changed by a click: a switch turned over by any click; a choice to its next
+     * option (left) or the one before (right), going round; a number one up (left) or down
+     * (right), ten with shift, and kept within its range; Q, back to the default. Through
+     * the same checks as the commands.
      */
     private Outcome change(Settings.Setting s, Click click) {
         boolean op = operator.getAsBoolean();
@@ -495,6 +502,8 @@ final class ConfigPages {
             text = "default";
         } else if (s.isSwitch) {
             text = now != 0 ? "false" : "true";
+        } else if (s.isChoice()) {
+            text = s.words(cycle(s, now, click == Click.LEFT || click == Click.SHIFT_LEFT ? 1 : -1));
         } else {
             int step = click == Click.SHIFT_LEFT || click == Click.SHIFT_RIGHT ? 10 : 1;
             double next = s.clamp(click == Click.LEFT || click == Click.SHIFT_LEFT ? now + step : now - step);
@@ -505,6 +514,15 @@ final class ConfigPages {
         refused = defaults ? settings.changeDefault(s.key, text, op) : settings.change(bot.data(), s.key, text, op);
         if (refused != null) return new Outcome(Kind.REFUSED, refused);
         return Objects.equals(before, own(s)) ? Outcome.NOTHING : Outcome.CHANGED;
+    }
+
+    /**
+     * A choice's option {@code step} places from {@code v}, going round: after the last, the
+     * first; before the first, the last. A few options, all of them a click or two away.
+     */
+    static double cycle(Settings.Setting s, double v, int step) {
+        int n = s.options.size();
+        return Math.floorMod((int) Math.round(v) + step, n);
     }
 
     // --- words -------------------------------------------------------------------------------
