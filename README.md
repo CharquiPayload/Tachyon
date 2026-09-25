@@ -13,7 +13,8 @@ anything, and no bot needs a Minecraft account or a game client of its own.
 
 **Early days (0.2.0).** It walks, follows, hunts, clears areas and talks; it comes
 back when it dies and when the server restarts; its settings have an in-game
-menu; most of what a player does is still to come.
+menu; most of what a player does is still to come. What is done and what comes
+next: [ROADMAP.md](ROADMAP.md).
 
 ## Installing
 
