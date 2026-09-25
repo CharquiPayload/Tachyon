@@ -11,13 +11,14 @@ in the chat.
 One jar, in the server's `mods/` folder. Players join without installing
 anything, and no bot needs a Minecraft account or a game client of its own.
 
-**Early days (0.2.0).** It walks, follows, hunts, clears areas and talks; it
+**Early days (0.3.0).** It walks, follows, hunts, clears areas and talks; it
 fights with a sword and a bow, wears armor, eats, and tosses what it does not
 need; by itself it fights back, shoots or runs from creepers, backs off when
 badly hurt, comes up for air, digs itself out when buried and eats when hungry;
 it comes back when it dies (and goes back for what it dropped) and when the
 server restarts; its settings have an in-game menu; most of what a player does
-is still to come.
+is still to come. What is done and what comes next:
+[ROADMAP.md](ROADMAP.md).
 
 ## Installing
 
