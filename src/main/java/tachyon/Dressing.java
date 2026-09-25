@@ -38,7 +38,7 @@ final class Dressing implements Ability {
 
     @Override
     public void settings(Settings settings) {
-        settings.bool(DRESS_ALONE, true, "whether it puts on better armor it carries by itself (it looks every 10 s)",
+        settings.bool(DRESS_ALONE, true, "It puts on better armor it carries, by itself (it looks every 10 seconds).",
                 Settings.Who.OWNER).label("Put on better armor").group("Gear").basic();
     }
 
@@ -52,7 +52,7 @@ final class Dressing implements Ability {
         if (Math.floorMod(now + p.name().hashCode(), EVERY) != 0) return;
         if (!Settings.bool(p, DRESS_ALONE) || !p.body.isAlive() || p.body.isUsingItem() || !Bots.handsFree(p)) return;
         List<String> changes = best(p);
-        if (!changes.isEmpty()) LOG.info("[tachyon] {} put on {} by itself", p.name(), String.join(", ", changes));
+        if (!changes.isEmpty()) Notices.technical(LOG, p, p.name() + " put on " + String.join(", ", changes) + " by itself");
     }
 
     @Override

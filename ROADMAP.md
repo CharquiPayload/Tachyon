@@ -37,18 +37,27 @@ do, rebuilt to run on the server, and adds things only a server can do.
     archers, backs off when badly hurt, comes up for air, stays afloat, digs
     itself out when buried and eats when hungry. It sees only what a player
     in its place could see.
+- **Polish.**
+  - `gather` ("get me some dirt", "chop 20 logs", seeds from grass): it breaks
+    only that kind of block, in the open, and picks up what drops. When none
+    is near, it goes out looking.
+  - Builds are safe. The server keeps the blocks players placed, and a bot
+    never gathers them or what they touch. Its brain's `clear` refuses a box
+    that holds them; a person's `/tachyon clear` still works.
+  - A `verbose` setting: technical lines for the owner only when asked for.
+    Deaths and orders given by a command reach the owner through the notices.
+  - A spawn point set on a slab or a dirt path works: the bot tries one block
+    up.
+  - The menu reads better: on and off, full sentences, labels in refusals,
+    and which default Q goes back to.
+  - A bot with gravel fallen at its feet digs itself out.
 
 ## In progress
 
-- **Polish and moving better** (see Next).
+- **Moving better** (see Next).
 
 ## Next
 
-- **Polish.**
-  - `gather` ("get me some dirt") breaks only that kind of block.
-  - A verbose setting for technical lines.
-  - A spawn point set on a partial block works.
-  - The menu's wording gets clearer.
 - **Hordes.** Many bots with one brain: an army that follows a general, or a
   mindless horde. A headquarters with chests of gear, and wars between hordes.
 - **Moving better.** Bridges, towers and tunnels. Fence gates, climbing out of

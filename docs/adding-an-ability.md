@@ -8,15 +8,19 @@ one does not mean editing them. The other way round, an ability uses what
 `Bots` and `Brain` offer: the command helpers, the orders, the legs, a bot's
 data, the brain's notices.
 
-Three exceptions, on purpose, because what they decide lives in the core:
+Four exceptions, on purpose, because what they decide lives in the core:
 Walking's `sprint` setting is read in `Bots.canRun`, where the legs (routes,
 keys, doors) are; `Bots.died` asks `Respawning.staysDead` whether a bot that
-died comes back (its `respawn` setting, and the deaths it counts), since a bot's
-coming and going is there; and `Tools.offered` reads Talking's `brain_lite`,
-since which tools a brain is sent is decided there.
+died comes back (its `respawn` setting, and the deaths it counts), and
+`Respawning.died` and `Respawning.where` for the words its owner hears, since a
+bot's coming and going is there; `Tools.offered` reads Talking's `brain_lite`,
+since which tools a brain is sent is decided there; and what the core must tell
+a player (a death, an order's end, a brain that could not think) goes through
+`Notices.tell`, whose settings (`notices`, `verbose`) say how.
 
 This page is for whoever adds the next one. Read `Walking.java`, `Hunting.java`
 and `Hunt.java` alongside it: they are the smallest complete examples.
+`Gathering.java` and `Gather.java` are one that breaks blocks by itself.
 
 ## The files
 
@@ -210,6 +214,27 @@ whether the hand changed, to return on. `Gear` has the rest of what a bot
 carries: an item's id in words and back (`Gear.id`, `Gear.item`), counts,
 whether something fits.
 
+**Breaking blocks.** `Clear.reachOf(pos)` is the goal of a walk to within a
+player's reach of a block, and `Clear.sight(p, level, pos)` what a click at it
+would hit from where the bot stands (null out of reach): another block in front
+of it is what the click breaks. The stroke is the server's own for a player
+(`gameMode.handleBlockBreakAction`: start, then stop once the block's time is
+up), so protections and the tool's wear apply as to anyone; `Gather` has it in a
+few lines, a hand that changed mid-stroke starting it again. A job that breaks
+blocks **by itself** (not a box a person named) never breaks a build:
+`PlacedBlocks.byPlayer(level, pos)` says whether a player placed the block there
+(the server keeps it, per level, with the world), and `Gather.partOfBuild` is the
+rest of the rule (a block that touches a building block or a placed one; a log
+whose tree is none). A brain's tool that breaks a box looks first with
+`PlacedBlocks.count(level, a, b)`, as `clear`'s does, and sends a person to the
+command when there are any.
+
+**Going out looking.** With none of what it wants in sight, a job does not stand
+still: `Legs` walks it out in legs of 48 blocks (300 blocks or 3 minutes at most,
+twice an errand, turning right when three legs get it nowhere), the job looking
+around as it walks and calling `legs.found()` once something is in sight; its
+`step` says, when the search is over, how far it looked, for the job's last line.
+
 **What it goes after, it sees.** A job that picks a target (a mob to hunt, a
 player to throw to) takes only what a player in the bot's place would know of:
 in sight from its eyes, or within 4 blocks (`Hunt.noticed(b, e)`,
@@ -319,6 +344,17 @@ Besides its tools, an ability can reach a bot's brain (`Bots.brain(p)`):
   a while (keep when in the bot's slot, see below). A few wait while it thinks.
   Its owner chose how much it hears unasked (`notices`): with `off` send none,
   and with `plain` say it with `Notices.say` instead (`Tossing` does both).
+- **`Notices.tell(p, to, text, technical, inItsWords)`**: what the mod must tell
+  a player once, when it happens (a death, an order given by a command that is
+  over, a brain that could not think), without `say`'s rest; to its owner or to
+  whoever gave the order. Its `notices` decide how, as for `say`; with its
+  `verbose` on, the technical line goes as it is.
+- **`Notices.technical(LOG, p, text)`**: a line about what a bot did (a reflex
+  taking the body, what it gave up), with its coordinates, the bot's name first:
+  it goes to the server's log through the ability's own logger, and, with the
+  bot's `verbose` on, to its owner too. Use it for every line of the log about one
+  bot; players read no other line of the mod's but notices and commands' answers.
+  On the server's thread (from a brain's thread, through `server.execute`).
 - **`rules(bot, rules)`**: lines added to its instructions on every turn
   (standing orders, a personality). Short, in plain words for the model.
 - **`state(bot, parts)`**: a few words each, added to the state line at the
@@ -338,12 +374,12 @@ static final String TORCHES = "torches";
 
 @Override
 public void settings(Settings settings) {
-    settings.bool(TORCHES, true, "whether it lights the tunnels it digs", Settings.Who.OWNER)
+    settings.bool(TORCHES, true, "It lights the tunnels it digs with torches.", Settings.Who.OWNER)
             .label("Light tunnels").group("Mining").basic();
-    settings.number("follow_gap", 3, 1, 10, "how far it keeps from whom it follows", Settings.Who.OWNER)
+    settings.number("follow_gap", 3, 1, 10, "How far it keeps from whom it follows, in blocks.", Settings.Who.OWNER)
             .label("Following distance").group("Walking").advanced();
     settings.choice("tunnel", "straight", List.of("straight", "stairs", "spiral"),
-            "how it digs down: straight, stairs or a spiral", Settings.Who.OWNER)
+            "How it digs down: straight, in stairs or in a spiral.", Settings.Who.OWNER)
             .label("Way down").group("Mining").advanced();
 }
 ```
@@ -365,8 +401,14 @@ Two options are a switch.
   they are in the bots' saved data, in `defaults.json` and in
   `tachyon.properties`. `url`, `model`, `key` and `timeout` are the brain's, and
   refused.
-- **The description** says what it decides, as "whether it ..." or "how far
-  ...": `/tachyon settings` shows it, and the menu under the setting's name.
+- **The description** is full sentences written for players, a capital first and
+  a period at the end (`Settings.check` refuses anything else): what the bot does,
+  for a switch what it does when it is on, and, when that is not plain, what
+  happens when it is off ("When it is off, it only runs from those that come
+  close."). Not "whether it ..." fragments, nor "false: ..." as a command line
+  says it. `/tachyon settings` shows it after the value, and the menu under the
+  setting's name. Players read a switch as `on` or `off` everywhere
+  (`Setting.words`); refusals name a setting by its label (`Setting.named`).
 - **Who**: `OWNER` (its owner and operators may change it) for what concerns
   only the bot; `OPERATOR` for what concerns the server (what it may break,
   whom it may fight). The menu shows an operators' setting to anyone else as
@@ -573,6 +615,9 @@ an `@Accessor` interface (`PlayerListAccess`).
 ## Before it is done
 
 - `./gradlew build`: it compiles and every test passes, the old ones too.
+- A line of the log about one bot goes through `Notices.technical`, and one that
+  a player must hear through `Notices.say` or `Notices.tell`: no ability sends
+  players a `[tachyon]` line of its own.
 - `./gradlew runServer`: try it in a game, with the commands and, when it has
   tools, with a bot spoken to (every word said to a bot is a paid call to a
   model: a few are enough).

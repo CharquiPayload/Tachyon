@@ -175,8 +175,8 @@ final class Defending implements Ability {
 
     @Override
     public void settings(Settings settings) {
-        settings.bool(PLAYERS, false, "whether it also fights players who attack it or its owner, as it fights mobs"
-                        + " that do; without it, a player's hits only bring its owner a notice", Settings.Who.OPERATOR)
+        settings.bool(PLAYERS, false, "It also fights players who attack it or its owner, as it fights mobs that do."
+                        + " When it is off, a player's hits only bring its owner a notice.", Settings.Who.OPERATOR)
                 .label("Defend from players").group("Fighting").advanced();
     }
 
@@ -257,7 +257,8 @@ final class Defending implements Ability {
             f.attacker = e;
             f.answer = Answer.NONE;
             f.planX = Double.NaN;
-            LOG.info("[tachyon] {} answers {}, {} away, which {}", p.name(), Threats.a(e), Threats.blocks(p.body.distanceTo(e)), did);
+            Notices.technical(LOG, p, p.name() + " answers " + Threats.a(e) + ", "
+                    + Threats.blocks(p.body.distanceTo(e)) + " away, which " + did);
         }
         f.lastHit = now;
         f.foes.add(Threats.name(e));
@@ -302,7 +303,7 @@ final class Defending implements Ability {
         if (f.attacker != null) {
             String gone = gone(p, f, now);
             if (gone != null) {
-                LOG.info("[tachyon] {} lets {} be: {}", p.name(), Threats.a(f.attacker), gone);
+                Notices.technical(LOG, p, p.name() + " lets " + Threats.a(f.attacker) + " be: " + gone);
                 f.attacker = null;
                 f.answer = Answer.NONE;
             }
@@ -389,8 +390,8 @@ final class Defending implements Ability {
                 // keep its order waiting for nothing; asking again at once would take the body
                 // back every few ticks. (What the search said is its doing now.)
                 p.slot(NoWay.class, NoWay::new).add(a.getUUID(), now);
-                LOG.info("[tachyon] {} does not go for {} for {} s: it finds no way to it ({})", p.name(), Threats.a(a),
-                        NO_WAY_TICKS / 20, p.doing);
+                Notices.technical(LOG, p, p.name() + " does not go for " + Threats.a(a) + " for "
+                        + (NO_WAY_TICKS / 20) + " s: it finds no way to it (" + p.doing + ")");
                 letGo(p, f);
                 return;
             }
@@ -449,8 +450,9 @@ final class Defending implements Ability {
         StringBuilder s = new StringBuilder();
         if (f.hits > 0) s.append(f.hits).append(f.hits == 1 ? " hit" : " hits").append(" with ").append(f.with);
         if (f.arrows > 0) s.append(s.length() > 0 ? " and " : "").append(f.arrows).append(f.arrows == 1 ? " arrow" : " arrows");
-        LOG.info("[tachyon] {} fought back ({}): {} in {} s; {} health", p.name(), String.join(", ", f.foes), s,
-                Math.round((b.getServer().getTickCount() - f.since) / 20.0), Retreating.health(b));
+        Notices.technical(LOG, p, p.name() + " fought back (" + String.join(", ", f.foes) + "): " + s + " in "
+                + Math.round((b.getServer().getTickCount() - f.since) / 20.0) + " s; " + Retreating.health(b)
+                + " health");
     }
 
     // --- the guard: the hands ----------------------------------------------------------------------

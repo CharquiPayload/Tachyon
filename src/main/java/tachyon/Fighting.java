@@ -82,7 +82,7 @@ final class Fighting implements Ability {
 
     @Override
     public void settings(Settings settings) {
-        settings.bool(HUNT_PLAYERS, false, "whether its brain's attack and kill may go after a player named to them",
+        settings.bool(HUNT_PLAYERS, false, "Its brain's attack and kill may go after a player named to them.",
                 Settings.Who.OPERATOR).label("Fight players by name").group("Fighting").advanced();
     }
 

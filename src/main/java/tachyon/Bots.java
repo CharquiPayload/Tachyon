@@ -1005,7 +1005,10 @@ public final class Bots {
     /** How long a dead bot lies before it comes back: 2 s, about what a player takes to press "respawn". */
     private static final int RESPAWN_TICKS = 40;
 
-    /** A bot that died and comes back: at tick {@code at}. {@code death}: "Ada died (Ada fell from a high place)". */
+    /**
+     * A bot that died and comes back: at tick {@code at}. {@code death}: the line the chat
+     * said, "Ada fell from a high place".
+     */
     private record Dead(long at, String death) {
     }
 
@@ -1027,10 +1030,12 @@ public final class Bots {
         Bot p = body.bot;
         if (p == null) return;          // already on its way out
         Abilities.died(p, cause);
-        String death = p.name() + " died (" + message.getString() + ")";
+        String death = message.getString();
         String staying = Respawning.staysDead(p, System.currentTimeMillis());
         if (staying != null) {
-            tellOwner(p, death + " and left: " + staying);
+            // Plainly: it has no brain left to say it once it is gone.
+            Notices.tell(p, p.owner, Respawning.died(p.name(), death) + ", and left: " + staying,
+                    p.name() + " died (" + death + ") and left: " + staying, false);
             leave(p, Leaving.DIED);
             return;
         }
@@ -1060,7 +1065,9 @@ public final class Bots {
             } catch (RuntimeException e) {
                 // Never a crash of the tick; and never a bot left dead for good either.
                 LOG.error("[tachyon] {} could not come back: it leaves", p.name(), e);
-                tellOwner(p, d.death() + " and left: it could not come back (the server's log says why)");
+                String why = "it could not come back (the server's log says why)";
+                Notices.tell(p, p.owner, Respawning.died(p.name(), d.death()) + ", and left: " + why,
+                        p.name() + " died (" + d.death() + ") and left: " + why, false);
                 leave(p, Leaving.DIED);
             }
         }
@@ -1124,7 +1131,8 @@ public final class Bots {
         // then what it was ordered while dead, if anything, from here.
         halt(p, "standing");
         goOn(p);
-        tellOwner(p, d.death() + " and is back at " + Brain.pos(body.blockPosition()));
+        Notices.tell(p, p.owner, Respawning.died(p.name(), d.death()) + ", and is back " + Respawning.where(old, to),
+                p.name() + " died (" + d.death() + ") and is back at " + Brain.pos(body.blockPosition()), true);
         if (p.brain != null) p.brain.back();
     }
 
@@ -1147,13 +1155,6 @@ public final class Bots {
                 q.aside = new Aside(q.aside.job(), q.aside.target(), now, q.aside.order());
             }
         }
-    }
-
-    /** A line to its owner, if they are in the game; and to the log, for the console. */
-    private static void tellOwner(Bot p, String text) {
-        LOG.info("[tachyon] {}", text);
-        ServerPlayer owner = p.owner == null ? null : p.body.getServer().getPlayerList().getPlayer(p.owner);
-        if (owner != null && owner != p.body) owner.sendSystemMessage(Component.literal("[tachyon] " + text));
     }
 
     /**
@@ -1379,20 +1380,21 @@ public final class Bots {
 
     /**
      * Its order, over by itself (done, or given up), in {@code doing}: whoever gave it is
-     * told, once. Said in the chat, its brain tells them in its words. Then the abilities
-     * hear of it, and a standing order set aside for this one is taken up again.
+     * told, once. Said in the chat, its brain tells them in its words; given by a command,
+     * they hear it as its notices say (its words, whispered; a plain line; nothing), or the
+     * technical line with its verbose on. Then the abilities hear of it, and a standing
+     * order set aside for this one is taken up again.
      */
     static void finished(Bot p) {
         String how = p.doing;
         Order o = p.order;
         p.order = null;
         if (o != null) {
-            LOG.info("[tachyon] {} is over: {}", p.name(), how);
             if (o.spoken()) {
+                LOG.info("[tachyon] {} is over: {}", p.name(), how);
                 brain(p).over(o.who(), o.name(), how);
             } else {
-                ServerPlayer pl = o.who() == null ? null : p.body.getServer().getPlayerList().getPlayer(o.who());
-                if (pl != null) pl.sendSystemMessage(Component.literal("[tachyon] " + p.name() + ": " + how));
+                Notices.tell(p, o.who(), how, p.name() + " is over: " + how, true);
             }
         }
         Abilities.over(p, how);

@@ -54,7 +54,7 @@ final class Returning implements Ability {
 
     @Override
     public void settings(Settings settings) {
-        settings.bool(COME_BACK, true, "whether it comes back by itself, where it was, when the server starts again",
+        settings.bool(COME_BACK, true, "When the server starts again, it comes back by itself, where it was.",
                 Settings.Who.OWNER).label("Come back after a restart").group("Life").basic();
     }
 

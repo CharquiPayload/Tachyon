@@ -96,13 +96,14 @@ final class Breathing implements Ability {
             if (!b.isUnderWater() || b.getAirSupply() > AIR_LOW) return;       // the body's own fields
             s = new Surfacing(now, b.getAirSupply());
             SURFACING.put(p, s);
-            LOG.info("[tachyon] {} comes up for air: {} of 300 left under water at {}", p.name(), s.air,
-                    Brain.pos(b.blockPosition()));
+            Notices.technical(LOG, p, p.name() + " comes up for air: " + s.air + " of 300 left under water at "
+                    + Brain.pos(b.blockPosition()));
         }
         int air = b.getAirSupply();
         if (air >= AIR_ENOUGH) {
             SURFACING.remove(p);
-            LOG.info("[tachyon] {} has air again ({} of 300) after {} s", p.name(), air, Math.round((now - s.since) / 20.0));
+            Notices.technical(LOG, p, p.name() + " has air again (" + air + " of 300) after "
+                    + Math.round((now - s.since) / 20.0) + " s");
             Bots.giveBack(p, this);
             return;
         }
@@ -162,7 +163,7 @@ final class Breathing implements Ability {
             s.awaiting = false;
             if (!s.noWaySaid) {
                 s.noWaySaid = true;
-                LOG.info("[tachyon] {} finds no way up to air from {}", p.name(), Brain.pos(b.blockPosition()));
+                Notices.technical(LOG, p, p.name() + " finds no way up to air from " + Brain.pos(b.blockPosition()));
             }
         }
         if (now - s.plannedAt >= REPLAN) {
@@ -234,8 +235,8 @@ final class Breathing implements Ability {
         if (s == null || b.isDeadOrDying()) return;
         if (!s.drowningSaid) {
             s.drowningSaid = true;
-            LOG.info("[tachyon] {} is drowning at {} ({} health) on its way up", p.name(), Brain.pos(b.blockPosition()),
-                    Retreating.health(b));
+            Notices.technical(LOG, p, p.name() + " is drowning at " + Brain.pos(b.blockPosition()) + " ("
+                    + Retreating.health(b) + " health) on its way up");
         }
         if (!s.noWaySaid && Bots.holding(p) == this) return;       // still on its way up
         Notices.say(p, "drowning", "is drowning at " + Brain.pos(b.blockPosition()) + " (" + Retreating.health(b)

@@ -49,9 +49,9 @@ class SettingsTest {
     @BeforeEach
     void setUp() {
         settings = new Settings(key -> server.getProperty("default." + key));
-        settings.bool("sprint", true, "whether it may sprint when walking", Settings.Who.OWNER)
+        settings.bool("sprint", true, "It sprints when it walks.", Settings.Who.OWNER)
                 .label("Sprint when walking").group("Walking").basic();
-        settings.number("gap", 3, 1, 10, "how far it keeps", Settings.Who.OPERATOR)
+        settings.number("gap", 3, 1, 10, "How far it keeps.", Settings.Who.OPERATOR)
                 .label("Gap").group("Walking").advanced();
         data = BotData.load(dir, "Ada");
     }
@@ -155,7 +155,7 @@ class SettingsTest {
             assertEquals(0, value("sprint"), off);
         }
         for (String bad : new String[]{"maybe", "1", "", "tru"}) {
-            assertEquals("sprint is true or false (or default)", settings.set(data, "sprint", bad), bad);
+            assertEquals("\"Sprint when walking\" is on or off (or default)", settings.set(data, "sprint", bad), bad);
         }
         assertEquals(0, value("sprint"), "refused: unchanged");
     }
@@ -172,7 +172,7 @@ class SettingsTest {
         assertNull(settings.set(data, "gap", "10"));
         assertEquals(10, value("gap"));
 
-        String takes = "gap is a number from 1 to 10 (or default)";
+        String takes = "\"Gap\" is a number from 1 to 10 (or default)";
         for (String bad : new String[]{"11", "0.5", "-3", "abc", "1e3", "NaN", "Infinity", "0x5", "", "5."}) {
             assertEquals(takes, settings.set(data, "gap", bad), bad);
         }
@@ -196,10 +196,10 @@ class SettingsTest {
     }
 
     @Test
-    @DisplayName("values in words: true or false, a whole number without its .0")
+    @DisplayName("values in words: on or off (players read a switch so), a whole number without its .0")
     void words() {
-        assertEquals("true", settings.get("sprint").words(1));
-        assertEquals("false", settings.get("sprint").words(0));
+        assertEquals("on", settings.get("sprint").words(1));
+        assertEquals("off", settings.get("sprint").words(0));
         assertEquals("2", settings.get("gap").words(2));
         assertEquals("2.5", settings.get("gap").words(2.5));
     }
@@ -243,7 +243,7 @@ class SettingsTest {
     // --- a choice ----------------------------------------------------------------------------
 
     private Settings.Setting notices() {
-        return settings.choice("notices", "brain", List.of("brain", "plain", "off"), "how it tells its owner",
+        return settings.choice("notices", "brain", List.of("brain", "plain", "off"), "How it tells its owner.",
                 Settings.Who.OWNER).label("Notices").group("Brain").basic();
     }
 
@@ -259,7 +259,7 @@ class SettingsTest {
         assertEquals("\"plain\"", kept("notices").toString(), "kept by its name, not its place in the list");
         assertNull(settings.set(data, "notices", " off "));
         assertEquals("off", n.words(value("notices")));
-        String takes = "notices is one of brain, plain, off (or default)";
+        String takes = "\"Notices\" is one of brain, plain, off (or default)";
         for (String bad : new String[]{"loud", "1", "0", "", "true", "brains"}) {
             assertEquals(takes, settings.set(data, "notices", bad), bad);
         }
@@ -299,7 +299,7 @@ class SettingsTest {
         JsonObject kept = JsonParser.parseString(Files.readString(dir.resolve("defaults.json"), StandardCharsets.UTF_8))
                 .getAsJsonObject();
         assertEquals("off", kept.getAsJsonObject("settings").get("notices").getAsString());
-        assertEquals("notices is one of brain, plain, off (or default)", settings.changeDefault("notices", "on", true));
+        assertEquals("\"Notices\" is one of brain, plain, off (or default)", settings.changeDefault("notices", "on", true));
     }
 
     @Test
@@ -369,8 +369,8 @@ class SettingsTest {
     void changeDefaultChecks() {
         BotData store = game();
         assertEquals("only operators change the server's defaults", settings.changeDefault("sprint", "false", false));
-        assertEquals("gap is a number from 1 to 10 (or default)", settings.changeDefault("gap", "11", true));
-        assertEquals("sprint is true or false (or default)", settings.changeDefault("sprint", "maybe", true));
+        assertEquals("\"Gap\" is a number from 1 to 10 (or default)", settings.changeDefault("gap", "11", true));
+        assertEquals("\"Sprint when walking\" is on or off (or default)", settings.changeDefault("sprint", "maybe", true));
         assertTrue(settings.changeDefault("fly", "true", true).startsWith("no setting fly"));
         assertFalse(store.dirty(), "refused: nothing to write");
         assertNull(settings.inGame(settings.get("sprint")));
@@ -391,8 +391,8 @@ class SettingsTest {
         // Another server reading the same world: the same defaults. (Read afresh: the
         // shared stores are kept by file while a server runs.)
         Settings again = new Settings(key -> null);
-        again.bool("sprint", true, "whether it may sprint when walking", Settings.Who.OWNER);
-        again.number("gap", 3, 1, 10, "how far it keeps", Settings.Who.OPERATOR);
+        again.bool("sprint", true, "It sprints when it walks.", Settings.Who.OWNER);
+        again.number("gap", 3, 1, 10, "How far it keeps.", Settings.Who.OPERATOR);
         again.game(BotData.load(dir, "defaults"));
         assertEquals(0, again.serverDefault(again.get("sprint")));
         assertEquals(4.5, again.serverDefault(again.get("gap")));
@@ -414,15 +414,15 @@ class SettingsTest {
     }
 
     @Test
-    @DisplayName("who may change a bot's setting: its owner, or operators only when it is theirs; the same words as the command")
+    @DisplayName("who may change a bot's setting: its owner, or operators only when it is theirs; said by its label")
     void whoMayChange() {
-        assertEquals("only operators change gap", settings.change(data, "gap", "5", false));
+        assertEquals("only operators change \"Gap\"", settings.change(data, "gap", "5", false));
         assertNull(settings.own(data, settings.get("gap")), "refused: unchanged");
         assertFalse(data.dirty());
         assertNull(settings.change(data, "gap", "5", true));
         assertEquals(5, value("gap"));
         assertNull(settings.change(data, "sprint", "false", false), "an owner's setting: anyone who may order the bot");
-        assertEquals("only operators change gap", settings.mayChange(settings.get("gap"), false));
+        assertEquals("only operators change \"Gap\"", settings.mayChange(settings.get("gap"), false));
         assertNull(settings.mayChange(settings.get("sprint"), false));
     }
 
@@ -439,17 +439,23 @@ class SettingsTest {
         settings.check();
 
         Settings bare = new Settings(key -> null);
-        bare.bool("a", true, "a", Settings.Who.OWNER).group("G").basic();
+        bare.bool("a", true, "A.", Settings.Who.OWNER).group("G").basic();
         assertTrue(assertThrows(IllegalStateException.class, bare::check).getMessage().contains("has no label"));
         bare = new Settings(key -> null);
-        bare.bool("a", true, "a", Settings.Who.OWNER).label("A").basic();
+        bare.bool("a", true, "A.", Settings.Who.OWNER).label("A").basic();
         assertTrue(assertThrows(IllegalStateException.class, bare::check).getMessage().contains("has no group"));
         bare = new Settings(key -> null);
-        bare.bool("a", true, "a", Settings.Who.OWNER).label("A").group("G");
+        bare.bool("a", true, "A.", Settings.Who.OWNER).label("A").group("G");
         assertTrue(assertThrows(IllegalStateException.class, bare::check).getMessage().contains("has no level"));
         bare = new Settings(key -> null);
-        bare.bool("a", true, "a", Settings.Who.OWNER).label("A label that goes on and on and on").group("G").basic();
+        bare.bool("a", true, "A.", Settings.Who.OWNER).label("A label that goes on and on and on").group("G").basic();
         assertTrue(assertThrows(IllegalStateException.class, bare::check).getMessage().contains("32 at most"));
+        // A description is sentences for players: "whether it sprints" is not one.
+        for (String fragment : new String[]{"whether it sprints", "It sprints", "", "it sprints."}) {
+            bare = new Settings(key -> null);
+            bare.bool("a", true, fragment, Settings.Who.OWNER).label("A").group("G").basic();
+            assertTrue(assertThrows(IllegalStateException.class, bare::check).getMessage().contains("full sentences"), fragment);
+        }
     }
 
     @Test
@@ -512,5 +518,9 @@ class SettingsTest {
         assertEquals(declared, inReadme, "every setting the mod declares has its row in the README, and no other");
         assertEquals(List.of("Walking", "Life", "Night", "Gear", "Brain"), List.copyOf(mod.groups(Settings.Level.BASIC).keySet()));
         assertEquals(List.of("Brain", "Fighting", "Gear"), List.copyOf(mod.groups(Settings.Level.ADVANCED).keySet()));
+        for (Settings.Setting s : mod.all()) {
+            assertFalse(s.description.startsWith("Whether") || s.description.contains("false:") || s.description.contains("true:"),
+                    s.key + ": a description reads as sentences for players, not a command line's");
+        }
     }
 }

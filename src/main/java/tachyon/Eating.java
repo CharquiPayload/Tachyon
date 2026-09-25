@@ -168,7 +168,7 @@ final class Eating implements Ability {
                     + (hand.is(bite.food) ? "the bite was cut short" : "something else was put in my hand (" + (hand.isEmpty() ? "nothing" : Gear.id(hand)) + ")")
                     + "; food still " + after + "/20";
         }
-        LOG.info("[tachyon] {}: {}", p.name(), how);
+        Notices.technical(LOG, p, p.name() + ": " + how);
         if (bite.told != null) bite.told.complete(how);
     }
 

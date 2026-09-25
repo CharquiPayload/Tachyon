@@ -104,8 +104,8 @@ final class Tossing implements Ability {
 
     @Override
     public void settings(Settings settings) {
-        settings.bool(AT_ONCE, false, "whether it tosses its trash as soon as it picks it up; false: only when its backpack"
-                + " is full", Settings.Who.OWNER).label("Toss trash at once").group("Gear").advanced();
+        settings.bool(AT_ONCE, false, "It tosses its trash as soon as it picks it up. When it is off, it tosses it only"
+                + " when its backpack is full.", Settings.Who.OWNER).label("Toss trash at once").group("Gear").advanced();
     }
 
     // --- picking up ---------------------------------------------------------------------------
@@ -163,7 +163,7 @@ final class Tossing implements Ability {
         if (!full) f.told = false;
         if (tossed.isEmpty() && !full) return;
         String what = words(tossed);
-        if (!tossed.isEmpty()) LOG.info("[tachyon] {} tossed its trash: {}", p.name(), what);
+        if (!tossed.isEmpty()) Notices.technical(LOG, p, p.name() + " tossed its trash: " + what);
         long ms = System.currentTimeMillis();
         if (Settings.bool(p, AT_ONCE) && !full) return;       // tossing as it comes in is what it was told to do
         if (f.told || ms - f.toldAt < NOTICE_MS) return;
@@ -192,7 +192,8 @@ final class Tossing implements Ability {
     /**
      * Every stack of its trash tossed but, of a trash block it can build with, one: the stack
      * in its hand if it holds that block (it may be building with it), else the biggest. Never
-     * what it is using right now (a bite). On the server's thread.
+     * what it is using right now (a bite), nor what it is gathering (dirt, asked for, is on
+     * the list). On the server's thread.
      *
      * @return how many of what it tossed, by id; empty when nothing
      */
@@ -203,7 +204,7 @@ final class Tossing implements Ability {
         Map<Item, List<Integer>> slots = new LinkedHashMap<>();
         for (int i = 0; i < Gear.SLOTS; i++) {
             ItemStack s = inv.getItem(i);
-            if (s.isEmpty() || i == inv.selected && b.isUsingItem()) continue;
+            if (s.isEmpty() || i == inv.selected && b.isUsingItem() || Gather.gathering(p, s)) continue;
             if (trash.contains(BuiltInRegistries.ITEM.getKey(s.getItem()).toString())) {
                 slots.computeIfAbsent(s.getItem(), k -> new ArrayList<>()).add(i);
             }
@@ -252,7 +253,9 @@ final class Tossing implements Ability {
 
     /** Whether an item is its trash: a pickup a job does not walk to (Hunt's loot). */
     static boolean trash(Bots.Bot p, ItemStack s) {
-        return !s.isEmpty() && TRASH.has(p.data, BuiltInRegistries.ITEM.getKey(s.getItem()).toString());
+        // What it was told to gather is not trash while it gathers it: dirt is on the list.
+        return !s.isEmpty() && TRASH.has(p.data, BuiltInRegistries.ITEM.getKey(s.getItem()).toString())
+                && !Gather.gathering(p, s);
     }
 
     @Override
@@ -329,7 +332,7 @@ final class Tossing implements Ability {
         }
         int now = Gear.count(inv, item);
         int went = had - now;
-        LOG.info("[tachyon] {} tossed {} {}{}", p.name(), went, Gear.id(item), looking);
+        Notices.technical(LOG, p, p.name() + " tossed " + went + " " + Gear.id(item) + looking);
         return "I tossed " + went + " " + Gear.id(item) + looking + "; I have " + now + " left."
                 + " Tossed things vanish after 5 minutes, and I do not pick up again what I tossed.";
     }

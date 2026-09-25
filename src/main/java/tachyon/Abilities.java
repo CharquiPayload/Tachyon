@@ -36,6 +36,8 @@ final class Abilities {
             new Walking(),
             new Hunting(),
             new Clearing(),
+            new Gathering(),
+            new PlacedBlocks(),
             new Talking(),
             new Looking(),
             new Respawning(),

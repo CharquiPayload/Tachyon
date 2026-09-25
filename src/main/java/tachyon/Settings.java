@@ -111,12 +111,12 @@ final class Settings {
     }
 
     /**
-     * One setting, as declared: a switch (true or false), a number within its range, or a
+     * One setting, as declared: a switch (on or off), a number within its range, or a
      * choice among a few named options ("brain", "plain", "off"). Values are held as numbers
      * all the same: a switch's are 1 and 0, a choice's the place of its option in the list
      * (from 0), so that the layers, the ranges and the menu work alike for the three. What
-     * is kept in a bot's data, and said, is the words: true or false, the number, the
-     * option's name.
+     * is said is words: on or off, the number, the option's name; what is kept in a bot's
+     * data, true or false for a switch (JSON's own), the number, the option's name.
      *
      * <p>Its words for the menu are given as it is declared, one after another:
      * {@code settings.bool(...).label("Sprint when walking").group("Walking").basic()}. They
@@ -129,7 +129,12 @@ final class Settings {
         /** A choice's options, in order: its values are their places in it. Empty for a switch or a number. */
         final List<String> options;
         final double byDefault, min, max;
-        /** What it decides, as "whether it may sprint when walking". */
+        /**
+         * What it does, in full sentences for players, as the menu shows it under its label
+         * and {@code /tachyon settings} after its value: "It sprints when it walks, on flat
+         * ground." A switch's says what it does when it is on, and, if that is not plain, what
+         * happens when it is off.
+         */
         final String description;
         final Who who;
         /** Its short name in the menu, a few words: "Come back after dying". */
@@ -184,23 +189,31 @@ final class Settings {
         }
 
         /**
-         * A value in words: true or false, a choice's option, or the number, in plain
-         * digits (a whole one without its ".0"). Never Java's "1.0E-4": the menu turns a
-         * number it changed into words and back through {@link #parse}, which takes plain
-         * digits only, as a player types them.
+         * A value in words, as players read it: on or off, a choice's option, or the number,
+         * in plain digits (a whole one without its ".0"). Never Java's "1.0E-4": the menu
+         * turns a number it changed into words and back through {@link #parse}, which takes
+         * plain digits only, as a player types them.
          */
         String words(double v) {
-            if (isSwitch) return v != 0 ? "true" : "false";
+            if (isSwitch) return v != 0 ? "on" : "off";
             if (isChoice()) return options.get((int) Math.round(clamp(v)));
             if (v == Math.rint(v) && Math.abs(v) < 1e15) return String.valueOf((long) v);
             return BigDecimal.valueOf(v).stripTrailingZeros().toPlainString();
         }
 
-        /** What it takes, in words, for a refusal. */
+        /**
+         * Its label as a refusal names it: in quotes, since it is a few words among others
+         * (its key only while it has none yet, as it is being declared).
+         */
+        String named() {
+            return label == null ? key : "\"" + label + "\"";
+        }
+
+        /** What it takes, in words, for a refusal: by its label, as the menu shows it. */
         String takes() {
-            if (isSwitch) return key + " is true or false (or default)";
-            if (isChoice()) return key + " is one of " + String.join(", ", options) + " (or default)";
-            return key + " is a number from " + words(min) + " to " + words(max) + " (or default)";
+            if (isSwitch) return named() + " is on or off (or default)";
+            if (isChoice()) return named() + " is one of " + String.join(", ", options) + " (or default)";
+            return named() + " is a number from " + words(min) + " to " + words(max) + " (or default)";
         }
 
         /**
@@ -319,7 +332,8 @@ final class Settings {
     }
 
     /**
-     * Every setting has its words for the menu: a label of a few words, a group, a level.
+     * Every setting has its words for the menu: a label of a few words, a group, a level,
+     * and a description in full sentences.
      * Asked once every ability has declared its own (see Abilities): one without them is a
      * mistake of ours, said as the server starts, where it is seen at once.
      */
@@ -337,6 +351,10 @@ final class Settings {
             }
             if (s.level == null) {
                 throw new IllegalStateException("setting " + s.key + " has no level: declare it with .basic() or .advanced()");
+            }
+            if (s.description.isEmpty() || !Character.isUpperCase(s.description.charAt(0)) || !s.description.endsWith(".")) {
+                throw new IllegalStateException("setting " + s.key + ": its description is full sentences for players,"
+                        + " a capital first and a period at the end (\"It sprints when it walks.\")");
             }
         }
     }
@@ -440,6 +458,11 @@ final class Settings {
         return file != null ? file : s.byDefault;
     }
 
+    /** Which layer {@link #withoutGame} comes from: tachyon.properties, or the mod. */
+    From fileOrMod(Setting s) {
+        return fileDefault(s) != null ? From.FILE : From.MOD;
+    }
+
     /** The default set in game, or null when there is none (or no server runs). */
     Double inGame(Setting s) {
         return game == null ? null : own(game, s);
@@ -530,9 +553,12 @@ final class Settings {
         return refused != null ? refused : set(data, key, text);
     }
 
-    /** Why whoever it is may not change a bot's {@code s}, or null when they may: a setting of operators' is theirs only. */
+    /**
+     * Why whoever it is may not change a bot's {@code s}, or null when they may: a setting of
+     * operators' is theirs only. Said by its label, as the menu shows it.
+     */
     String mayChange(Setting s, boolean operator) {
-        return s.who == Who.OPERATOR && !operator ? "only operators change " + s.key : null;
+        return s.who == Who.OPERATOR && !operator ? "only operators change " + s.named() : null;
     }
 
     /** Why whoever it is may not change the server's defaults, or null when they may: operators only. */
@@ -593,14 +619,20 @@ final class Settings {
         Settings all = Abilities.settings();
         List<String> lines = new ArrayList<>();
         for (Bots.Bot p : them) {
-            lines.add(p.name() + "'s settings:");
-            for (Setting s : all.all()) {
-                lines.add("  " + s.key + " = " + s.words(all.value(p.data, s)) + " (" + all.from(p.data, s).words + ")"
-                        + ": " + s.description + (s.who == Who.OPERATOR ? " [operators only]" : ""));
-            }
+            lines.add(p.name() + "'s settings (the key in brackets, for /tachyon set):");
+            for (Setting s : all.all()) lines.add(line(s, all.value(p.data, s), all.from(p.data, s)));
         }
         Bots.say(c.getSource(), String.join("\n", lines));
         return them.size();
+    }
+
+    /**
+     * A setting in a line, as the commands list it: its label and key, its value and where
+     * that comes from, who changes it when that is operators only, and what it does.
+     */
+    private static String line(Setting s, double value, From from) {
+        return "  " + s.label + " [" + s.key + "]: " + s.words(value) + " (" + from.words + ")"
+                + (s.who == Who.OPERATOR ? ", operators only" : "") + ". " + s.description;
     }
 
     private static int set(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
@@ -617,21 +649,19 @@ final class Settings {
         }
         Setting s = all.get(key);
         if (value.equalsIgnoreCase("default")) {
-            return Bots.told(c, them, key + " is the server default again: " + s.words(all.serverDefault(s))
-                    + ", " + all.defaultFrom(s).words);
+            return Bots.told(c, them, s.label + ": back to the server default, " + s.words(all.serverDefault(s))
+                    + " (" + all.defaultFrom(s).words + ")");
         }
-        return Bots.told(c, them, key + " = " + s.words(all.value(them.get(0).data, s)) + " (its own)");
+        return Bots.told(c, them, s.label + ": " + s.words(all.value(them.get(0).data, s)) + " (its own)");
     }
 
     /** {@code /tachyon defaults}: every setting's server default, and where it comes from. */
     private static int defaults(CommandContext<CommandSourceStack> c) {
         Settings all = Abilities.settings();
         List<String> lines = new ArrayList<>();
-        lines.add("the server's defaults, for every bot without a value of its own:");
-        for (Setting s : all.all()) {
-            lines.add("  " + s.key + " = " + s.words(all.serverDefault(s)) + " (" + all.defaultFrom(s).words + ")"
-                    + ": " + s.description);
-        }
+        lines.add("the server's defaults, for every bot without a value of its own (the key in brackets, for"
+                + " /tachyon defaults):");
+        for (Setting s : all.all()) lines.add(line(s, all.serverDefault(s), all.defaultFrom(s)));
         return Bots.say(c.getSource(), String.join("\n", lines));
     }
 
@@ -642,7 +672,7 @@ final class Settings {
         String refused = all.changeDefault(key, value, Bots.operator(c.getSource()));
         if (refused != null) return Bots.fail(c.getSource(), refused);
         Setting s = all.get(key);
-        return Bots.say(c.getSource(), key + "'s server default: " + s.words(all.serverDefault(s)) + " ("
+        return Bots.say(c.getSource(), s.label + ", the server's default: " + s.words(all.serverDefault(s)) + " ("
                 + all.defaultFrom(s).words + "), for every bot without a value of its own");
     }
 
@@ -653,13 +683,13 @@ final class Settings {
                 .filter(s -> operator || s.who == Who.OWNER).map(s -> s.key), b);
     }
 
-    /** A switch's true and false; a choice's options; a number's ends and default; and default. */
+    /** A switch's on and off; a choice's options; a number's ends and default; and default. */
     private static CompletableFuture<Suggestions> values(CommandContext<CommandSourceStack> c, SuggestionsBuilder b) {
         Setting s = Abilities.settings().get(StringArgumentType.getString(c, "key"));
         List<String> words = new ArrayList<>();
         if (s != null && s.isSwitch) {
-            words.add("true");
-            words.add("false");
+            words.add("on");
+            words.add("off");
         } else if (s != null && s.isChoice()) {
             words.addAll(s.options);
         } else if (s != null) {

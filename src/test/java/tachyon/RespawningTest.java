@@ -50,6 +50,15 @@ class RespawningTest {
     }
 
     @Test
+    @DisplayName("how it died, for its owner, without its name: the chat's line after it, or the whole line in brackets")
+    void died() {
+        assertEquals("was slain by Zombie", Respawning.died("Ada", "Ada was slain by Zombie"));
+        assertEquals("fell from a high place", Respawning.died("Ada", "Ada fell from a high place"));
+        assertEquals("died (Adam was slain by Zombie)", Respawning.died("Ada", "Adam was slain by Zombie"), "another name that starts so");
+        assertEquals("died (a mod's own words)", Respawning.died("Ada", "a mod's own words"));
+    }
+
+    @Test
     @DisplayName("what it dropped is lost after lava (or dying in it of the burning), the void (or below the world), drowning")
     void lost() {
         assertEquals("lava", Respawning.lost("minecraft:lava", false, false));

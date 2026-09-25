@@ -112,8 +112,8 @@ final class Needs implements Ability {
         }
         String no = Eating.eatBest(p, this);
         if (no == null) {
-            LOG.info("[tachyon] {} eats {} by itself ({}: food {}/20, health {}/20)", p.name(), Gear.id(b.getMainHandItem()),
-                    why, food, Retreating.health(b));
+            Notices.technical(LOG, p, p.name() + " eats " + Gear.id(b.getMainHandItem()) + " by itself (" + why
+                    + ": food " + food + "/20, health " + Retreating.health(b) + "/20)");
         }
     }
 

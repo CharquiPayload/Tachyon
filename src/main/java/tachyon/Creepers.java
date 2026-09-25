@@ -177,8 +177,8 @@ final class Creepers implements Ability {
 
     @Override
     public void settings(Settings settings) {
-        settings.bool(SHOOT, true, "whether it shoots creepers 10 to 25 blocks away with its bow by itself; without it,"
-                + " it only runs from those that come close", Settings.Who.OWNER)
+        settings.bool(SHOOT, true, "It shoots creepers 10 to 25 blocks away with its bow, by itself. When it is off, it"
+                + " only runs from those that come close.", Settings.Who.OWNER)
                 .label("Shoot creepers").group("Life").basic();
     }
 
@@ -214,7 +214,8 @@ final class Creepers implements Ability {
             w = watch(p, w, c);
             if (w.fleeing) {
                 w.fleeing = false;
-                LOG.info("[tachyon] {} stops running: the creeper is {} away, in range; it shoots", p.name(), Threats.blocks(d));
+                Notices.technical(LOG, p, p.name() + " stops running: the creeper is " + Threats.blocks(d)
+                        + " away, in range; it shoots");
             }
             String doing = "shooting a creeper " + Threats.blocks(d) + " away";
             if (!Bots.takeOver(p, this, SHOT, doing)) return;
@@ -235,7 +236,8 @@ final class Creepers implements Ability {
                 w.fleeing = true;
                 w.corneredAt = -1;
                 w.near = false;
-                LOG.info("[tachyon] {} runs from a creeper {} away{}", p.name(), Threats.blocks(d), swelling ? ", swelling" : "");
+                Notices.technical(LOG, p, p.name() + " runs from a creeper " + Threats.blocks(d) + " away"
+                        + (swelling ? ", swelling" : ""));
             }
             flee(p, w, d, now);
             return;
@@ -364,10 +366,11 @@ final class Creepers implements Ability {
         WATCHES.remove(p);
         letDown(p, w);
         if (w.arrows > 0) {
-            LOG.info("[tachyon] {} shot {} arrow{} at a creeper: {}", p.name(), w.arrows, w.arrows == 1 ? "" : "s",
-                    w.creeper.isAlive() ? "it is still alive, " + (how == null ? "out of its range now" : how) : "it is dead");
+            Notices.technical(LOG, p, p.name() + " shot " + w.arrows + " arrow" + (w.arrows == 1 ? "" : "s")
+                    + " at a creeper: " + (w.creeper.isAlive() ? "it is still alive, "
+                    + (how == null ? "out of its range now" : how) : "it is dead"));
         } else if (how != null && w.fleeing) {
-            LOG.info("[tachyon] {} stops running: {}", p.name(), how);
+            Notices.technical(LOG, p, p.name() + " stops running: " + how);
         }
         Bots.giveBack(p, this);
     }
@@ -451,8 +454,8 @@ final class Creepers implements Ability {
             if (!answer(r)) {
                 known.reach.remove(c.getUUID());
                 known.leaveAlone(c.getUUID(), now + NO_WAY_TICKS);
-                LOG.info("[tachyon] {} leaves alone a creeper {} away: it has no way on foot to it (for {} s)",
-                        p.name(), Threats.blocks(b.distanceTo(c)), NO_WAY_TICKS / 20);
+                Notices.technical(LOG, p, p.name() + " leaves alone a creeper " + Threats.blocks(b.distanceTo(c))
+                        + " away: it has no way on foot to it (for " + (NO_WAY_TICKS / 20) + " s)");
                 return false;
             }
             if (now < r.until()) return true;
@@ -495,8 +498,9 @@ final class Creepers implements Ability {
         double dx = b.getX() - c.getX(), dz = b.getZ() - c.getZ(), len = Math.hypot(dx, dz);
         boolean coming = len > 0.01 && ((c.getX() - c.xo) * dx + (c.getZ() - c.zo) * dz) / len > COMING;
         if (!known.scared(c.getUUID(), now, c.getX(), c.getZ(), coming)) return false;
-        LOG.info("[tachyon] {} leaves alone a creeper {} away: {} scares in {} s without it coming (for {} s)",
-                p.name(), Threats.blocks(b.distanceTo(c)), SCARES_MAX, SCARES_WINDOW / 20, SCARED_TICKS / 20);
+        Notices.technical(LOG, p, p.name() + " leaves alone a creeper " + Threats.blocks(b.distanceTo(c)) + " away: "
+                + SCARES_MAX + " scares in " + (SCARES_WINDOW / 20) + " s without it coming (for "
+                + (SCARED_TICKS / 20) + " s)");
         return true;
     }
 }

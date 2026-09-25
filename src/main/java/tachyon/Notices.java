@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * What a bot's body tells its owner without being asked: how going back for its things
@@ -30,6 +31,14 @@ import java.util.Map;
  * only while its owner is in the game (a bot nobody owns says nothing). Masurium's body
  * notices rested 10 minutes each the same way. A notice that finds its owner away is not
  * kept for later: what it says is old news by then.
+ *
+ * <p>What the mod itself must tell a player about a bot (it died and is back, an order
+ * given to it by a command is over, its brain could not think) goes the same way, through
+ * {@link #tell}, without the rest: each happens once. And the {@code verbose} setting: off
+ * (the default), a player reads no technical line of the mod's; on, its owner also gets
+ * the lines the server's log has about the bot ({@link #technical}: what it does by
+ * itself, where, with coordinates), for finding out what went wrong. A command's own answer
+ * is not one of these: it is what the command says.
  */
 final class Notices implements Ability {
 
@@ -39,14 +48,20 @@ final class Notices implements Ability {
     static final String NOTICES = "notices";
     static final String BRAIN = "brain", PLAIN = "plain", OFF = "off";
     static final List<String> OPTIONS = List.of(BRAIN, PLAIN, OFF);
+    /** Whether its owner also gets the technical lines the log has about it. */
+    static final String VERBOSE = "verbose";
 
     @Override
     public void settings(Settings settings) {
-        settings.choice(NOTICES, BRAIN, OPTIONS, "how it tells its owner what nobody asked about (how going back"
-                        + " for its things went, a player hitting it, a full backpack, what it could not deal with):"
-                        + " brain, in its own words, to its owner alone (a call to its model); plain, a fixed line;"
-                        + " off, not at all", Settings.Who.OWNER)
+        settings.choice(NOTICES, BRAIN, OPTIONS, "It tells its owner what nobody asked about (how going back for its"
+                        + " things went, a player hitting it, a full backpack, what it could not deal with, a death, an"
+                        + " order given by a command that is over) in its own words, whispered to its owner alone (brain:"
+                        + " a call to its model), in a fixed line (plain), or not at all (off).", Settings.Who.OWNER)
                 .label("Notices to its owner").group("Brain").basic();
+        settings.bool(VERBOSE, false, "Its owner also gets the technical lines the server's log has about it (what it does"
+                        + " by itself, with coordinates), for finding out what went wrong. When it is off, its owner hears"
+                        + " only its notices.", Settings.Who.OWNER)
+                .label("Technical lines").group("Brain").advanced();
     }
 
     /**
@@ -70,11 +85,59 @@ final class Notices implements Ability {
         if (!p.slot(Rest.class, Rest::new).due(kind, System.currentTimeMillis())) return false;
         LOG.info("[tachyon] {} tells {} ({}, {}): {}", p.name(), p.ownerName, kind, how, text);
         if (how.equals(BRAIN) && !Brain.config().url(p.name()).isEmpty()) {
-            Bots.brain(p).report(text);
+            Bots.brain(p).report(p.owner, p.ownerName, text);
         } else {
             owner.sendSystemMessage(Component.literal("[tachyon] " + p.name() + ": " + text));
         }
         return true;
+    }
+
+    /**
+     * What the mod itself must tell a player about a bot, once, when it happens: it died
+     * and is back (or left), an order given to it by a command is over, its brain could not
+     * think. Logged as {@code technical} always. With its {@code verbose} on, {@code to}
+     * gets that line as it is, with its coordinates (and its brain's words too, when its
+     * notices are said by its brain). Off, {@code text} goes as its {@code notices} setting
+     * says: its brain says it in its words, whispered to {@code to}; or a plain line; or
+     * nothing. On the server's thread.
+     *
+     * @param to         whom it is for: its owner, or who gave the order; null (the console,
+     *                   nobody's bot) or away: only the log has it
+     * @param text       what happened, about the bot without naming it, with no period at the
+     *                   end, as {@link #say} takes it
+     * @param technical  the log's line, the bot's name first
+     * @param inItsWords whether its brain may say it: not once the bot is leaving (it has no
+     *                   brain left then), and not when what is told is that its brain failed
+     */
+    static void tell(Bots.Bot p, UUID to, String text, String technical, boolean inItsWords) {
+        LOG.info("[tachyon] {}", technical);
+        ServerPlayer pl = to == null ? null : p.body.getServer().getPlayerList().getPlayer(to);
+        if (pl == null || pl == p.body) return;
+        String how = Settings.choice(p, NOTICES);
+        boolean brain = inItsWords && how.equals(BRAIN) && !Brain.config().url(p.name()).isEmpty();
+        if (Settings.bool(p, VERBOSE)) {
+            pl.sendSystemMessage(Component.literal("[tachyon] " + technical));
+            if (brain) Bots.brain(p).report(to, pl.getGameProfile().getName(), text);
+            return;
+        }
+        if (how.equals(OFF)) return;
+        if (brain) Bots.brain(p).report(to, pl.getGameProfile().getName(), text);
+        else pl.sendSystemMessage(Component.literal("[tachyon] " + p.name() + ": " + text));
+    }
+
+    /**
+     * A technical line about a bot (a reflex taking over, a tool its brain called, what it
+     * gave up), with its coordinates: to the server's log, through the caller's logger; and,
+     * with its {@code verbose} on, to its owner too, if they are in the game. On the
+     * server's thread.
+     *
+     * @param text the line, the bot's name first, as the log has it
+     */
+    static void technical(Logger log, Bots.Bot p, String text) {
+        log.info("[tachyon] {}", text);
+        if (p.owner == null || p.leaving() != null || !Settings.bool(p, VERBOSE)) return;
+        ServerPlayer owner = p.body.getServer().getPlayerList().getPlayer(p.owner);
+        if (owner != null && owner != p.body) owner.sendSystemMessage(Component.literal("[tachyon] " + text));
     }
 
     /**

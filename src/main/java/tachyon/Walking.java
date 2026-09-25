@@ -100,7 +100,8 @@ final class Walking implements Ability {
 
     @Override
     public void settings(Settings settings) {
-        settings.bool(SPRINT, true, "whether it may sprint when walking", Settings.Who.OWNER)
+        settings.bool(SPRINT, true, "It sprints when it walks: on flat ground, and not on the last steps.",
+                        Settings.Who.OWNER)
                 .label("Sprint when walking").group("Walking").basic();
     }
 }

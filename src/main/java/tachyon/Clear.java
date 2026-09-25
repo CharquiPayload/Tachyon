@@ -233,7 +233,7 @@ final class Clear extends Job {
         }
         // What a click at it would hit from here, if anything is in reach: something of
         // the box in front of it is broken first.
-        BlockHitResult hit = sight(p, goal);
+        BlockHitResult hit = sight(p, area.level, goal);
         if (hit != null) {
             BlockPos seen = hit.getBlockPos();
             if (!seen.equals(goal) && area.claim(seen, p)) {
@@ -272,9 +272,9 @@ final class Clear extends Job {
      * Any tile from which the eyes are within {@link #REACH} of the block's centre. The
      * ring the path finder has for chasing weighs height at half, and ended routes on a
      * pit's rim four blocks over the block, out of reach; its estimate still serves,
-     * since this goal lies inside that ring.
+     * since this goal lies inside that ring. {@link Gather}'s walks to a block too.
      */
-    private static Route.Meta reachOf(BlockPos pos) {
+    static Route.Meta reachOf(BlockPos pos) {
         Route.Meta ring = Route.Meta.near(new Route.Point(pos.getX(), pos.getY(), pos.getZ()), REACH);
         double cx = pos.getX() + 0.5, cy = pos.getY() + 0.5, cz = pos.getZ() + 0.5;
         return new Route.Meta() {
@@ -365,7 +365,16 @@ final class Clear extends Job {
      * What a click at {@code pos} would hit from where it stands: the first block on the
      * line from its eyes, if within a player's reach; null if out of reach.
      */
-    private BlockHitResult sight(Bots.Bot p, BlockPos pos) {
+    static BlockHitResult sight(Bots.Bot p, ServerLevel level, BlockPos pos) {
+        return sight(p, level, pos, ClipContext.Block.OUTLINE);
+    }
+
+    /**
+     * The same, with the blocks that stop the line said by {@code blocks}: every outline (a
+     * click's), or only what one collides with ({@link Gather}'s, Masurium's Miner's: grass
+     * or a torch in front is no wall to dig through, and a player breaks it in passing).
+     */
+    static BlockHitResult sight(Bots.Bot p, ServerLevel level, BlockPos pos, ClipContext.Block blocks) {
         BotPlayer b = p.body;
         if (!b.canInteractWithBlock(pos, 0.0)) return null;
         Vec3 eye = b.getEyePosition();
@@ -380,8 +389,7 @@ final class Clear extends Job {
                 aim = centre.add(d.getStepX() * 0.45, d.getStepY() * 0.45, d.getStepZ() * 0.45);
                 if (aim.subtract(centre).dot(eye.subtract(centre)) <= 0) continue;     // turned away
             }
-            BlockHitResult hit = area.level.clip(new ClipContext(eye, aim,
-                    ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, b));
+            BlockHitResult hit = level.clip(new ClipContext(eye, aim, blocks, ClipContext.Fluid.NONE, b));
             if (hit.getType() != HitResult.Type.BLOCK) {
                 return new BlockHitResult(aim, Direction.getNearest(eye.subtract(centre)), pos, false);
             }

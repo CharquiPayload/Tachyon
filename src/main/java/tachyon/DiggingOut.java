@@ -30,11 +30,15 @@ import java.util.Map;
  * the space it opened is broken again, as it comes. Masurium's, which it had after a strip
  * mine ended in "I cannot see it: there is gravel in the way" while the bot suffocated.
  *
- * <p>It starts when the game hurts it for being inside a block (that damage is the only
- * sign it waits for, so it costs nothing until then) and ends when neither its head nor
- * its feet are in a block that suffocates; then what it was doing goes on. A block it
- * cannot break (bedrock, a protected spawn) or cannot break in 30 s is given up, and its
- * owner told: there is nothing left it can do.
+ * <p>It starts when the game hurts it for being inside a block, and when a look once a
+ * second (each bot on a tick of its own) finds its feet inside one: sand or gravel that
+ * lands in the space of its feet leaves its eyes free, so the game does not hurt it, and
+ * yet it cannot walk out of it (the last block of a column of gravel it dug itself out of
+ * landed there a moment after, and it stood in it for good). That look is one block read
+ * a second, and the rest is looked at only when that block is one that suffocates. It
+ * ends when neither its head nor its feet are in a block that suffocates; then what it
+ * was doing goes on. A block it cannot break (bedrock, a protected spawn) or cannot break
+ * in 30 s is given up, and its owner told: there is nothing left it can do.
  */
 final class DiggingOut implements Ability {
 
@@ -46,6 +50,8 @@ final class DiggingOut implements Ability {
     static final int BREAK_MAX = 20 * 30;
     /** After giving up, being inside a block starts nothing for this long: 30 s. */
     static final int GIVEN_UP_TICKS = 20 * 30;
+    /** Whether its feet are inside a block is looked at this often (ticks), each bot on a tick of its own. */
+    static final int FEET_EVERY = 20;
 
     /** A bot digging itself out: what it breaks, for how long, and how many it broke. */
     private static final class Dig {
@@ -67,18 +73,42 @@ final class DiggingOut implements Ability {
     @Override
     public void hurt(Bots.Bot p, DamageSource source, float amount) {
         if (!source.is(DamageTypes.IN_WALL) || DIGS.containsKey(p)) return;
-        long now = p.body.getServer().getTickCount();
+        start(p, p.body.getServer().getTickCount(), false);
+    }
+
+    /**
+     * It digs itself out from now on, unless it gave up on it lately.
+     *
+     * @param feet whether a look found its feet in a block (else the game hurt it for its head in one)
+     */
+    private static void start(Bots.Bot p, long now, boolean feet) {
         Long until = GAVE_UP.get(p);
         if (until != null && now < until) return;
         GAVE_UP.remove(p);
         DIGS.put(p, new Dig(now));
         BlockPos lid = lid(p.body);
-        LOG.info("[tachyon] {} is buried{} at {}: it digs itself out", p.name(),
-                lid == null ? "" : " in " + block(p.body.level().getBlockState(lid)), Brain.pos(p.body.blockPosition()));
+        String in = lid == null ? "a block" : block(p.body.level().getBlockState(lid));
+        Notices.technical(LOG, p, p.name() + (feet ? " stands in " + in : " is buried in " + in) + " at "
+                + Brain.pos(p.body.blockPosition()) + ": it digs itself out");
+    }
+
+    /**
+     * Whether its feet are inside a block that suffocates, as a look once a second finds
+     * them: the block at its feet first (one read), and only when that one suffocates, the
+     * whole look {@link #lid} takes. Standing on soul sand is not in it.
+     */
+    private static boolean feetInside(BotPlayer b) {
+        BlockPos feet = b.blockPosition();
+        BlockState s = b.level().getBlockState(feet);
+        return !s.isAir() && s.isSuffocating(b.level(), feet) && lid(b) != null;
     }
 
     @Override
     public void tick(Bots.Bot p, long now) {
+        if (Math.floorMod(now + p.name().hashCode(), FEET_EVERY) == 0 && !DIGS.containsKey(p) && p.body.isAlive()
+                && feetInside(p.body)) {
+            start(p, now, true);
+        }
         if (DIGS.isEmpty()) return;
         Dig d = DIGS.get(p);
         if (d == null) return;
@@ -91,10 +121,10 @@ final class DiggingOut implements Ability {
             Bots.freeHands(p, this);
             if (d.broken == 0) {
                 // A block at its head only: the body crawls under it (the game's own pose), and breathes.
-                LOG.info("[tachyon] {} is not buried any more: nothing broken", p.name());
+                Notices.technical(LOG, p, p.name() + " is not buried any more: nothing broken");
             } else {
-                LOG.info("[tachyon] {} dug itself out: {} block{} broken in {} s", p.name(), d.broken, d.broken == 1 ? "" : "s",
-                        Math.round((now - d.since) / 20.0));
+                Notices.technical(LOG, p, p.name() + " dug itself out: " + d.broken + " block"
+                        + (d.broken == 1 ? "" : "s") + " broken in " + Math.round((now - d.since) / 20.0) + " s");
             }
             Bots.giveBack(p, this);
             return;
@@ -165,7 +195,7 @@ final class DiggingOut implements Ability {
         abort(p, d);
         DIGS.remove(p);
         GAVE_UP.put(p, (long) b.getServer().getTickCount() + GIVEN_UP_TICKS);
-        LOG.info("[tachyon] {} cannot dig itself out at {}: {}", p.name(), Brain.pos(b.blockPosition()), why);
+        Notices.technical(LOG, p, p.name() + " cannot dig itself out at " + Brain.pos(b.blockPosition()) + ": " + why);
         Notices.say(p, "buried", "is buried at " + Brain.pos(b.blockPosition()) + " and cannot dig itself out: " + why);
         Bots.freeHands(p, this);
         Bots.giveBack(p, this);

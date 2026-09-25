@@ -66,8 +66,8 @@ final class Recovering implements Ability {
 
     @Override
     public void settings(Settings settings) {
-        settings.bool(RECOVER, true, "whether it goes back for what it dropped when it died, once it is back"
-                + " (2 tries within 6 minutes of the death at most; never after lava, the void or drowning)",
+        settings.bool(RECOVER, true, "Once it is back from a death, it goes back for what it dropped: 2 tries within 6"
+                + " minutes of the death at most, and never after lava, the void or drowning.",
                 Settings.Who.OWNER).label("Go back for its things").group("Life").basic();
     }
 

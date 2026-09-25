@@ -389,7 +389,7 @@ final class ConfigPages {
     private Button button(Settings.Setting s) {
         double v = value(s);
         Settings.From from = defaults ? settings.defaultFrom(s) : settings.from(bot.data(), s);
-        List<Line> lore = new ArrayList<>(text(Tone.TEXT, capital(s.description) + "."));
+        List<Line> lore = new ArrayList<>(text(Tone.TEXT, s.description));
         lore.add(Line.BLANK);
         lore.add(new Line(Tone.VALUE, "Value: " + s.words(v)));
         if (s.isChoice()) lore.addAll(text(Tone.TEXT, "Options: " + String.join(", ", s.options)));
@@ -397,7 +397,7 @@ final class ConfigPages {
         lore.add(Line.BLANK);
         String refused = refusal(s);
         if (refused != null) {
-            lore.add(new Line(Tone.WARNING, "Locked: " + refused));
+            lore.addAll(text(Tone.WARNING, "Locked: " + refused));
             return new Button(Icon.LOCKED, s.label, lore, 1, null);
         }
         if (s.isSwitch) {
@@ -408,12 +408,28 @@ final class ConfigPages {
             lore.add(new Line(Tone.HINT, "Left click: +1, right click: -1"));
             lore.add(new Line(Tone.HINT, "Shift: 10 at a time (" + s.words(s.min) + " to " + s.words(s.max) + ")"));
         }
-        double back = defaults ? settings.withoutGame(s) : settings.serverDefault(s);
-        lore.add(new Line(Tone.HINT, "Q: back to the default (" + s.words(back) + ")"));
+        lore.addAll(text(Tone.HINT, "Q: back to " + backTo(s)));
         if (s.isSwitch) return new Button(v != 0 ? Icon.ON : Icon.OFF, s.label, lore, 1, null);
         if (s.isChoice()) return new Button(Icon.CHOICE, s.label, lore, 1, null);
         boolean shown = v == Math.rint(v) && v >= 1 && v <= 99;
         return new Button(Icon.NUMBER, s.label, lore, shown ? (int) v : 1, null);
+    }
+
+    /**
+     * What Q puts a setting back to, saying which default that is and its value: on a bot's
+     * page, the server's default (set in game, in tachyon.properties, or the mod's); on the
+     * Server defaults page, what is there without the one set in game (tachyon.properties',
+     * or the mod's).
+     */
+    private String backTo(Settings.Setting s) {
+        double back = defaults ? settings.withoutGame(s) : settings.serverDefault(s);
+        Settings.From from = defaults ? settings.fileOrMod(s) : settings.defaultFrom(s);
+        String which = switch (from) {
+            case GAME -> "the server default set in game";
+            case FILE -> "the server default in tachyon.properties";
+            default -> "the mod's default";
+        };
+        return which + " (" + s.words(back) + ")";
     }
 
     /** The value this page shows for s: the bot's, or the server's default. */
@@ -501,7 +517,7 @@ final class ConfigPages {
         if (click == Click.DROP) {
             text = "default";
         } else if (s.isSwitch) {
-            text = now != 0 ? "false" : "true";
+            text = now != 0 ? "off" : "on";
         } else if (s.isChoice()) {
             text = s.words(cycle(s, now, click == Click.LEFT || click == Click.SHIFT_LEFT ? 1 : -1));
         } else {
@@ -527,6 +543,27 @@ final class ConfigPages {
 
     // --- words -------------------------------------------------------------------------------
 
+    /** Words, with those between quotes joined back into one ("Left out of sleeping"). */
+    private static List<String> quoted(String[] words) {
+        List<String> out = new ArrayList<>();
+        StringBuilder in = null;
+        for (String w : words) {
+            if (in != null) {
+                in.append(' ').append(w);
+                if (w.endsWith("\"")) {
+                    out.add(in.toString());
+                    in = null;
+                }
+            } else if (w.startsWith("\"") && !(w.length() > 1 && w.endsWith("\""))) {
+                in = new StringBuilder(w);
+            } else {
+                out.add(w);
+            }
+        }
+        if (in != null) out.add(in.toString());
+        return out;
+    }
+
     /** Words as lines of a tone, cut at {@link #LINE}. */
     private static List<Line> text(Tone tone, String words) {
         List<Line> out = new ArrayList<>();
@@ -534,11 +571,14 @@ final class ConfigPages {
         return out;
     }
 
-    /** Words cut into lines of {@code width} characters at most, at spaces; a longer word is a line of its own. */
+    /**
+     * Words cut into lines of {@code width} characters at most, at spaces; a longer word is a
+     * line of its own. Words in quotes (a setting's label, in a refusal) stay on one line.
+     */
     static List<String> wrap(String words, int width) {
         List<String> out = new ArrayList<>();
         StringBuilder line = new StringBuilder();
-        for (String word : words.trim().split("\\s+")) {
+        for (String word : quoted(words.trim().split("\\s+"))) {
             if (word.isEmpty()) continue;
             if (!line.isEmpty() && line.length() + 1 + word.length() > width) {
                 out.add(line.toString());
@@ -549,9 +589,5 @@ final class ConfigPages {
         }
         if (!line.isEmpty()) out.add(line.toString());
         return out;
-    }
-
-    private static String capital(String s) {
-        return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 }

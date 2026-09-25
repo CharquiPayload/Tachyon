@@ -118,9 +118,9 @@ final class Retreating implements Ability {
 
     @Override
     public void settings(Settings settings) {
-        settings.bool(RETREAT, true, "whether it breaks off what it is doing and backs off when badly hurt (6 health or"
-                        + " less, or poisoned) with something hostile at hand, until it makes out nothing hostile within 24"
-                        + " blocks (a minute at most)",
+        settings.bool(RETREAT, true, "Badly hurt (6 health or less, or poisoned) with something hostile at hand, it"
+                        + " breaks off what it is doing and backs off, until it makes out nothing hostile within 24 blocks"
+                        + " (a minute at most).",
                 Settings.Who.OWNER).label("Back off when badly hurt").group("Life").basic();
     }
 
@@ -168,8 +168,8 @@ final class Retreating implements Ability {
             if (from == null) return;
             r = new Retreat(from, now);
             RETREATS.put(p, r);
-            LOG.info("[tachyon] {} backs off: {} health, {} {} away", p.name(), health(b), Threats.a(from),
-                    Threats.blocks(b.distanceTo(from)));
+            Notices.technical(LOG, p, p.name() + " backs off: " + health(b) + " health, " + Threats.a(from) + " "
+                    + Threats.blocks(b.distanceTo(from)) + " away");
         }
         if (!Settings.bool(p, RETREAT)) {
             end(p, r, "its retreat_when_hurt was turned off");
@@ -255,10 +255,10 @@ final class Retreating implements Ability {
         BotPlayer b = p.body;
         long seconds = Math.round((b.getServer().getTickCount() - r.since) / 20.0);
         if (why == null) {
-            LOG.info("[tachyon] {} shook them off: nothing hostile within {} blocks after {} s, {} health, at {}", p.name(),
-                    (int) SAFE, seconds, health(b), Brain.pos(b.blockPosition()));
+            Notices.technical(LOG, p, p.name() + " shook them off: nothing hostile within " + (int) SAFE
+                    + " blocks after " + seconds + " s, " + health(b) + " health, at " + Brain.pos(b.blockPosition()));
         } else {
-            LOG.info("[tachyon] {} stops backing off after {} s: {}", p.name(), seconds, why);
+            Notices.technical(LOG, p, p.name() + " stops backing off after " + seconds + " s: " + why);
         }
         Bots.giveBack(p, this);
     }
@@ -266,7 +266,8 @@ final class Retreating implements Ability {
     /** No way off from where it is: its owner hears of it (once in a while), and it keeps looking. */
     static void cornered(Bots.Bot p, String what) {
         BotPlayer b = p.body;
-        LOG.info("[tachyon] {} is cornered at {}: {}, and no way off", p.name(), Brain.pos(b.blockPosition()), what);
+        Notices.technical(LOG, p, p.name() + " is cornered at " + Brain.pos(b.blockPosition()) + ": " + what
+                + ", and no way off");
         Notices.say(p, "cornered", "is cornered at " + Brain.pos(b.blockPosition()) + ": " + what + ", and it finds no way off");
     }
 

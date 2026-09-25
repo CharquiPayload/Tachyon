@@ -50,8 +50,8 @@ public final class Sleeping implements Ability {
     @Override
     public void settings(Settings settings) {
         // The operators': whether the others can skip the night is the server's business.
-        settings.bool(IGNORED, true, "whether the players skip the night without it (it does not count for the"
-                + " sleeping percentage) and no phantoms spawn because of it", Settings.Who.OPERATOR)
+        settings.bool(IGNORED, true, "The players skip the night without it: it does not count for the sleeping"
+                + " percentage, and no phantoms spawn because of it.", Settings.Who.OPERATOR)
                 .label("Left out of sleeping").group("Night").basic();
     }
 
@@ -86,7 +86,8 @@ public final class Sleeping implements Ability {
         if (!(source.getEntity() instanceof Phantom) || Settings.bool(p, IGNORED)) return;
         BotPlayer b = p.body;
         int nights = b.getStats().getValue(Stats.CUSTOM.get(Stats.TIME_SINCE_REST)) / 24000;
-        LOG.info("[tachyon] {} is attacked by phantoms at {} ({} nights without a bed)", p.name(), Brain.pos(b.blockPosition()), nights);
+        Notices.technical(LOG, p, p.name() + " is attacked by phantoms at " + Brain.pos(b.blockPosition()) + " ("
+                + nights + " nights without a bed)");
         Notices.say(p, "phantoms", "is attacked by phantoms at " + Brain.pos(b.blockPosition()) + " (one hit it; it has gone "
                 + nights + (nights == 1 ? " night" : " nights") + " without a bed): they come for a player who has not slept"
                 + " for three nights, and a night in a bed ends it, but sleeping skips the night for everyone, which is not its"

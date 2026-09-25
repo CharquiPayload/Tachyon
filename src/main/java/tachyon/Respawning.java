@@ -2,15 +2,23 @@ package tachyon;
 
 import com.google.gson.JsonObject;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.block.BedBlock;
+import net.minecraft.world.level.block.RespawnAnchorBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.portal.DimensionTransition;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.event.entity.living.LivingDeathEvent;
 import net.neoforged.neoforge.event.entity.living.LivingDropsEvent;
+import net.neoforged.neoforge.event.entity.player.PlayerRespawnPositionEvent;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -39,6 +47,12 @@ import java.util.UUID;
  * it in its state for 10 minutes after, and asks for it with {@code last_death}. Masurium
  * logged the same, the night a zombie killed it while its brain was thinking and nobody
  * could tell afterwards where or how.
+ *
+ * <p>A spawn point set with {@code /spawnpoint} where the player stood on a partial block
+ * (a slab, a dirt path, deep snow: the command takes the block the feet are in, which is
+ * that block itself) is refused by the game as blocked, and a player sent to the world's
+ * spawn instead. A bot tries the spot one block up first ({@link #oneUp}), then the game's
+ * rule.
  */
 final class Respawning implements Ability {
 
@@ -51,8 +65,8 @@ final class Respawning implements Ability {
 
     @Override
     public void settings(Settings settings) {
-        settings.bool(RESPAWN, true, "whether it comes back by itself when it dies (5 times in 5 minutes at most);"
-                + " false: it leaves the game", Settings.Who.OWNER)
+        settings.bool(RESPAWN, true, "When it dies, it comes back by itself 2 seconds later, 5 times in 5 minutes at"
+                + " most. When it is off, a bot that dies leaves the game.", Settings.Who.OWNER)
                 .label("Come back after dying").group("Life").basic();
     }
 
@@ -62,7 +76,7 @@ final class Respawning implements Ability {
      * death it comes back from is counted. On the server's thread.
      */
     static String staysDead(Bots.Bot p, long now) {
-        if (!Settings.bool(p, RESPAWN)) return "respawn is false";
+        if (!Settings.bool(p, RESPAWN)) return "its \"Come back after dying\" is off";
         if (!p.slot(Deaths.class, Deaths::new).comesBack(now)) return Deaths.MAX + " deaths in 5 minutes";
         return null;
     }
@@ -129,6 +143,7 @@ final class Respawning implements Ability {
      */
     @Override
     public void events(IEventBus bus) {
+        bus.addListener(PlayerRespawnPositionEvent.class, Respawning::oneUp);
         bus.addListener(EventPriority.LOWEST, LivingDeathEvent.class, e -> {
             Bots.Bot p = Bots.of(e.getEntity());
             if (p == null) return;
@@ -145,6 +160,59 @@ final class Respawning implements Ability {
                 d.items += item.getItem().getCount();
             }
         });
+    }
+
+    /**
+     * Where a bot comes back, when its spawn point is one {@code /spawnpoint} set (a forced
+     * one: no bed, no anchor) that the game refuses: the feet were inside a partial block
+     * the player stood on. It tries one block up, by the game's own rule for a forced spawn
+     * point (neither that block nor the one over it solid or a liquid); only when that is
+     * refused too does it go to the world's spawn, as the game decided. The spawn point is
+     * kept for the next death then. For bots only: a player's respawn is the game's.
+     */
+    static void oneUp(PlayerRespawnPositionEvent e) {
+        if (Bots.of(e.getEntity()) == null || !(e.getEntity() instanceof ServerPlayer old)) return;
+        if (!e.getDimensionTransition().missingRespawnBlock() || !old.isRespawnForced()) return;
+        BlockPos at = old.getRespawnPosition();
+        ServerLevel level = old.getServer().getLevel(old.getRespawnDimension());
+        if (at == null || level == null) return;
+        BlockPos up = at.above();
+        if (!free(level.getBlockState(up)) || !free(level.getBlockState(up.above()))) return;
+        Vec3 feet = new Vec3(up.getX() + 0.5, up.getY() + 0.1, up.getZ() + 0.5);
+        e.setDimensionTransition(new DimensionTransition(level, feet, Vec3.ZERO, old.getRespawnAngle(), 0.0F,
+                DimensionTransition.DO_NOTHING));
+        e.setCopyOriginalSpawnPosition(true);
+    }
+
+    /** The game's rule for a block a forced spawn point may be in: not solid, not a liquid. */
+    private static boolean free(BlockState s) {
+        return s.getBlock().isPossibleToRespawnInThis(s);
+    }
+
+    /**
+     * How it died, about the bot without naming it: the chat's line without the name at its
+     * head ("was slain by Zombie", "fell from a high place"), or, when the line does not start
+     * so (a mod's), "died (the line)".
+     */
+    static String died(String name, String line) {
+        String head = name + " ";
+        return line.startsWith(head) ? line.substring(head.length()) : "died (" + line + ")";
+    }
+
+    /**
+     * Where a bot came back, in words for its owner: "at its bed", "at its respawn anchor",
+     * "at its spawn point", "at the world's spawn", and why there when it had a spawn point
+     * the game refused. {@code old} is the body that died, which still has its spawn point.
+     */
+    static String where(ServerPlayer old, DimensionTransition to) {
+        BlockPos at = old.getRespawnPosition();
+        if (at == null) return "at the world's spawn";
+        if (to.missingRespawnBlock()) return "at the world's spawn: its bed or spawn point is gone or blocked";
+        ServerLevel level = old.getServer().getLevel(old.getRespawnDimension());
+        BlockState s = level == null ? null : level.getBlockState(at);
+        if (s != null && s.getBlock() instanceof BedBlock) return "at its bed";
+        if (s != null && s.getBlock() instanceof RespawnAnchorBlock) return "at its respawn anchor";
+        return "at its spawn point";
     }
 
     /** The deaths being dealt out right now: from LivingDeathEvent to {@link #died}. The server's thread's. */

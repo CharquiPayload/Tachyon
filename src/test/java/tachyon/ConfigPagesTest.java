@@ -35,15 +35,15 @@ class ConfigPagesTest {
     @BeforeEach
     void setUp() {
         settings = new Settings(key -> null);
-        settings.bool("sprint", true, "whether it may sprint when walking", Settings.Who.OWNER)
+        settings.bool("sprint", true, "It sprints when it walks.", Settings.Who.OWNER)
                 .label("Sprint").group("Walking").basic();
-        settings.number("gap", 3, 1, 10, "how far it keeps", Settings.Who.OWNER)
+        settings.number("gap", 3, 1, 10, "How far it keeps.", Settings.Who.OWNER)
                 .label("Gap").group("Walking").basic();
-        settings.bool("respawn", true, "whether it comes back", Settings.Who.OWNER)
+        settings.bool("respawn", true, "It comes back.", Settings.Who.OWNER)
                 .label("Come back after dying").group("Life").basic();
-        settings.bool("night", true, "whether the night goes on", Settings.Who.OPERATOR)
+        settings.bool("night", true, "The night goes on without it.", Settings.Who.OPERATOR)
                 .label("Left out of sleeping").group("Night").basic();
-        settings.bool("lite", false, "whether its brain is small", Settings.Who.OWNER)
+        settings.bool("lite", false, "Its brain is small.", Settings.Who.OWNER)
                 .label("Lite brain").group("Brain").advanced();
         settings.check();
         ada = bot("Ada");
@@ -115,16 +115,17 @@ class ConfigPagesTest {
     }
 
     @Test
-    @DisplayName("each setting says, under its name: what it decides, its value, where that comes from, how to change it, and Q")
+    @DisplayName("each setting says, under its name: what it does, its value (on or off), where that comes from, how to"
+            + " change it, and which default Q puts back")
     void whatASettingSays() {
         pages.start();
-        assertEquals(List.of("Whether it may sprint when walking.", "", "Value: true", "From: the mod's default", "",
-                "Click: turn it off", "Q: back to the default (true)"), lore(at(1)));
+        assertEquals(List.of("It sprints when it walks.", "", "Value: on", "From: the mod's default", "",
+                "Click: turn it off", "Q: back to the mod's default (on)"), lore(at(1)));
         assertEquals(List.of("How far it keeps.", "", "Value: 3", "From: the mod's default", "",
-                "Left click: +1, right click: -1", "Shift: 10 at a time (1 to 10)", "Q: back to the default (3)"),
+                "Left click: +1, right click: -1", "Shift: 10 at a time (1 to 10)", "Q: back to the mod's default (3)"),
                 lore(at(2)));
-        assertEquals(List.of("Whether the night goes on.", "", "Value: true", "From: the mod's default", "",
-                "Locked: only operators change night"), lore(at(19)));
+        assertEquals(List.of("The night goes on without it.", "", "Value: on", "From: the mod's default", "",
+                "Locked: only operators change", "\"Left out of sleeping\""), lore(at(19)));
 
         settings.set(ada.data(), "sprint", "false");
         pages.draw();
@@ -181,7 +182,7 @@ class ConfigPagesTest {
         for (ConfigPages.Click c : ConfigPages.Click.values()) {
             ConfigPages.Outcome done = pages.click(19, c);
             assertEquals(ConfigPages.Kind.REFUSED, done.kind(), c.name());
-            assertEquals("only operators change night", done.why());
+            assertEquals("only operators change \"Left out of sleeping\"", done.why());
         }
         assertNull(own("night"));
         assertFalse(ada.data().dirty());
@@ -238,7 +239,7 @@ class ConfigPagesTest {
     @DisplayName("no Advanced button when a level has nothing more to show")
     void noAdvancedButton() {
         Settings few = new Settings(key -> null);
-        few.bool("sprint", true, "whether it sprints", Settings.Who.OWNER).label("Sprint").group("Walking").basic();
+        few.bool("sprint", true, "It sprints.", Settings.Who.OWNER).label("Sprint").group("Walking").basic();
         pages = new ConfigPages(few, () -> operator, () -> List.copyOf(bots));
         pages.start();
         assertEquals(ConfigPages.Icon.FILLER, at(ConfigPages.ADVANCED).icon());
@@ -298,7 +299,7 @@ class ConfigPagesTest {
     @DisplayName("a number with a fractional range changes by clicks down to its lowest value, shown in plain digits")
     void fractionalNumber() {
         Settings fine = new Settings(key -> null);
-        fine.number("tiny", 0.5, 0.0001, 1, "how little", Settings.Who.OWNER).label("Tiny").group("Walking").basic();
+        fine.number("tiny", 0.5, 0.0001, 1, "How little.", Settings.Who.OWNER).label("Tiny").group("Walking").basic();
         pages = new ConfigPages(fine, () -> operator, () -> List.copyOf(bots));
         pages.start();
         assertEquals(ConfigPages.Kind.CHANGED, click(1, ConfigPages.Click.RIGHT));
@@ -315,14 +316,14 @@ class ConfigPagesTest {
     @DisplayName("a choice is a name tag listing its options: left click the next, right click the one before, going round; Q its default")
     void choiceClicks() {
         Settings named = new Settings(key -> null);
-        named.choice("notices", "brain", List.of("brain", "plain", "off"), "how it tells its owner", Settings.Who.OWNER)
+        named.choice("notices", "brain", List.of("brain", "plain", "off"), "How it tells its owner.", Settings.Who.OWNER)
                 .label("Notices").group("Brain").basic();
         pages = new ConfigPages(named, () -> operator, () -> List.copyOf(bots));
         pages.start();
         assertEquals(ConfigPages.Icon.CHOICE, at(1).icon());
         assertEquals("Notices", at(1).name());
         assertEquals(List.of("How it tells its owner.", "", "Value: brain", "Options: brain, plain, off",
-                "From: the mod's default", "", "Left click: plain, right click: off", "Q: back to the default (brain)"),
+                "From: the mod's default", "", "Left click: plain, right click: off", "Q: back to the mod's default (brain)"),
                 lore(at(1)));
         List<String> seen = new ArrayList<>();
         for (int i = 0; i < 4; i++) {
@@ -419,7 +420,7 @@ class ConfigPagesTest {
         assertEquals(0.0, settings.inGame(settings.get("sprint")));
         assertEquals(0, value("sprint"), "a bot without a value of its own has it");
         assertTrue(lore(at(1)).contains("From: server default, set in game"));
-        assertTrue(lore(at(1)).contains("Q: back to the default (true)"), "what clearing it goes back to");
+        assertTrue(lore(at(1)).contains("Q: back to the mod's default (on)"), "what clearing it goes back to, and which");
         assertEquals(ConfigPages.Kind.CHANGED, click(2, ConfigPages.Click.SHIFT_LEFT));
         assertEquals(10.0, settings.inGame(settings.get("gap")));
 
@@ -444,10 +445,10 @@ class ConfigPagesTest {
     void settingsPages() {
         Settings many = new Settings(key -> null);
         for (int g = 0; g < 7; g++) {
-            many.bool("g" + g, true, "a switch", Settings.Who.OWNER).label("G" + g).group("Group " + g).basic();
+            many.bool("g" + g, true, "A switch.", Settings.Who.OWNER).label("G" + g).group("Group " + g).basic();
         }
         for (int i = 0; i < 10; i++) {
-            many.bool("big" + i, i % 2 == 0, "a switch", Settings.Who.OWNER).label("Big " + i).group("Big").basic();
+            many.bool("big" + i, i % 2 == 0, "A switch.", Settings.Who.OWNER).label("Big " + i).group("Big").basic();
         }
         pages = new ConfigPages(many, () -> operator, () -> List.copyOf(bots));
         assertEquals(9, ConfigPages.rows(many.groups(Settings.Level.BASIC)).size(), "7 groups, and Big in two rows");
@@ -510,8 +511,10 @@ class ConfigPagesTest {
                 ConfigPages.wrap("whether the players skip the night without it", 36));
         assertEquals(List.of("a", "longerthanthewidth", "b"), ConfigPages.wrap("a longerthanthewidth b", 5));
         assertEquals(List.of(), ConfigPages.wrap("  ", 10));
-        for (String line : ConfigPages.wrap("whether it comes back by itself when it dies (5 times in 5 minutes at most);"
-                + " false: it leaves the game", ConfigPages.LINE)) {
+        assertEquals(List.of("Locked: only operators change", "\"Left out of sleeping\""),
+                ConfigPages.wrap("Locked: only operators change \"Left out of sleeping\"", 36), "a label in quotes stays whole");
+        for (String line : ConfigPages.wrap("When it dies, it comes back by itself 2 seconds later, 5 times in 5 minutes at"
+                + " most. When it is off, a bot that dies leaves the game.", ConfigPages.LINE)) {
             assertTrue(line.length() <= ConfigPages.LINE, line);
         }
     }

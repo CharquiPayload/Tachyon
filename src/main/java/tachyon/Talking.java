@@ -27,7 +27,8 @@ final class Talking implements Ability {
     @Override
     public void settings(Settings settings) {
         // Advanced: a player on a hosted model never needs it, and it makes a bot do less.
-        settings.bool(BRAIN_LITE, false, "whether its brain is sent only the core tools, for a small local model",
+        settings.bool(BRAIN_LITE, false, "Its brain is sent only the core tools, which a small local model chooses"
+                        + " from better.",
                 Settings.Who.OWNER).label("Lite brain").group("Brain").advanced();
     }
 

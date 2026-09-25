@@ -142,7 +142,8 @@ final class Brain {
     /** Said to it, by a player (or by the console, {@code who} null). On the server's thread. */
     void hear(UUID who, String name, String text) {
         if (config().url(p.name()).isEmpty()) {
-            tell(who, p.name() + " has no brain set up (tachyon.properties: url)");
+            Notices.tell(p, who, "has no brain set up (tachyon.properties: url)",
+                    p.name() + " has no brain set up (tachyon.properties: url)", false);
             return;
         }
         Said said = new Said(who, name, text, Kind.WORDS);
@@ -185,15 +186,16 @@ final class Brain {
     }
 
     /**
-     * What its body has to tell its owner unasked, in words for the model (see
-     * {@link Notices#say}, which decides whether it is said, and how): its brain tells them
-     * in its own words, in one call with no tools, as it tells news of an order; but to its
-     * owner alone, as a whisper ({@link #whisper}). It waits with the notices while it
-     * thinks. On the server's thread.
+     * What its body has to tell {@code who} unasked (its owner; or whoever gave it an order
+     * by a command, now over), in words for the model (see {@link Notices#say} and
+     * {@link Notices#tell}, which decide whether it is said, and how): its brain tells them
+     * in its own words, in one call with no tools, as it tells news of an order; but to them
+     * alone, as a whisper ({@link #whisper}). It waits with the notices while it thinks. On
+     * the server's thread.
      */
-    void report(String text) {
+    void report(UUID who, String name, String text) {
         if (config().url(p.name()).isEmpty()) return;
-        Said r = new Said(p.owner, p.ownerName == null ? "nobody" : p.ownerName, text, Kind.REPORT);
+        Said r = new Said(who, name == null ? "nobody" : name, text, Kind.REPORT);
         if (waits()) {
             if (notices.size() >= NOTICES_MAX) notices.removeFirst();
             notices.addLast(r);
@@ -235,7 +237,8 @@ final class Brain {
                         + ". Tell them how it went, in one short sentence, in the language they write to you in:"
                         + " only what this says happened, nothing more.)";
                 case NOTICE -> "(Nobody spoke: a notice. " + said.text() + ")";
-                case REPORT -> "(Nobody spoke: news from your own body, for " + said.name() + ", your owner: "
+                case REPORT -> "(Nobody spoke: news from your own body, for " + said.name()
+                        + (said.who() != null && said.who().equals(p.owner) ? ", your owner: " : ": ")
                         + said.text() + ". Tell " + said.name() + " in one or two short sentences, in the language"
                         + " they write to you in, in your own words: only what this says, nothing more.)";
                 case WORDS -> said.name() + ": " + said.text();
@@ -261,7 +264,9 @@ final class Brain {
                 }
                 for (Llm.ToolCall call : r.calls()) {
                     String result = result(onServer(() -> run(call, said, start.offered())), cfg.timeoutSeconds(name));
-                    LOG.info("[tachyon] {} used {} {}: {}", name, call.name(), call.args(), result);
+                    String used = name + " used " + call.name() + " " + call.args() + ": " + result;
+                    // The line is its owner's too with verbose on: said from the server's thread, where its settings are.
+                    server.execute(() -> Notices.technical(LOG, p, used));
                     JsonObject tool = new JsonObject();
                     tool.addProperty("role", "tool");
                     tool.addProperty("tool_call_id", call.id());
@@ -287,9 +292,12 @@ final class Brain {
             LOG.warn("[tachyon] {} could not think", name, e);
             String why = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             // A report is still told, in its plain words: what the body had to say is not lost with the model.
-            String line = said.kind() == Kind.REPORT ? name + ": " + said.text() + " (its brain could not say it: " + why + ")"
-                    : name + " could not think: " + why;
-            server.execute(() -> tell(said.who(), line));
+            String text = said.kind() == Kind.REPORT ? said.text() + " (its brain could not say it: " + why + ")"
+                    : "could not think: " + why;
+            // Never in its words: its brain is what failed.
+            server.execute(() -> {
+                if (p.leaving() == null) Notices.tell(p, said.who(), text, name + " " + text, false);
+            });
         } finally {
             server.execute(this::next);
         }
@@ -505,12 +513,5 @@ final class Brain {
                     .withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC));
             if (++n >= LINES_MAX) break;
         }
-    }
-
-    /** A word to the one who spoke only (or to the log, for the console). */
-    private void tell(UUID who, String text) {
-        ServerPlayer pl = who == null ? null : server.getPlayerList().getPlayer(who);
-        if (pl != null) pl.sendSystemMessage(Component.literal("[tachyon] " + text));
-        else LOG.info("[tachyon] {}", text);
     }
 }

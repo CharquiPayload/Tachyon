@@ -11,9 +11,10 @@ in the chat.
 One jar, in the server's `mods/` folder. Players join without installing
 anything, and no bot needs a Minecraft account or a game client of its own.
 
-**Early days (0.3.0).** It walks, follows, hunts, clears areas and talks; it
-fights with a sword and a bow, wears armor, eats, and tosses what it does not
-need; by itself it fights back, shoots or runs from creepers, backs off when
+**Early days (0.3.0).** It walks, follows, hunts, gathers materials, clears
+areas and talks; it fights with a sword and a bow, wears armor, eats, and tosses
+what it does not need, and never takes a piece of a player's build unless a
+person orders it to; by itself it fights back, shoots or runs from creepers, backs off when
 badly hurt, comes up for air, digs itself out when buried and eats when hungry;
 it comes back when it dies (and goes back for what it dropped) and when the
 server restarts; its settings have an in-game menu; most of what a player does
@@ -39,7 +40,9 @@ is still to come. What is done and what comes next:
 | `/tachyon stop <who>` | owner, operators | stops whatever it does |
 | `/tachyon hunt <who> <mob> [count]` | owner, operators | kills that many of a mob each and picks up the drops; without a count, every one it finds ([Hunting](#hunting-and-killing)) |
 | `/tachyon kill <who> <mob> [count]` | owner, operators | kills that many of a mob each with its bow, by sword without one; 1 without a count, 0 for every one it sees |
-| `/tachyon clear <who> <from> <to>` | owner, operators | breaks every block in the box, top layer first, with the right tools |
+| `/tachyon gather <who> <block> [count] [item]` | owner, operators | breaks blocks of that kind in the open and picks up what they drop, until it has `count` more (16 without one) of `item` (without one, blocks broken); never a player's build ([Gathering](#gathering)) |
+| `/tachyon gather <who> seeds [count]` | owner, operators | cuts grass until it has `count` more wheat seeds (16 without one) |
+| `/tachyon clear <who> <from> <to>` | owner, operators | breaks every block in the box, top layer first, with the right tools: whatever is there, builds too, since a person gave the order |
 | `/tachyon tell <who> <words>` | owner, operators | says something to a bot, as if in the chat |
 | `/tachyon food <who> [ban\|allow\|default <food>]` | owner, operators | the food it does not eat on its own ([Eating](#eating)), or a change to it |
 | `/tachyon trash <who> [add\|remove\|default <item>]` | owner, operators | what it tosses as trash ([Tossing](#tossing-and-trash)), or a change to it |
@@ -56,9 +59,12 @@ is still to come. What is done and what comes next:
 (`*` is every bot, `Miner*` every one whose name starts so), or a selector
 (`@a[distance=..10]`).
 
-An order given to one bot is told back when it is over (done, or given up): a line
-to whoever gave it. Orders to many bots are not, or the chat would flood; `list`
-shows how each goes.
+An order given to one bot is told back when it is over (done, or given up), to
+whoever gave it, as the bot's `notices` say ([What it tells you
+unasked](#talking-to-a-bot)): in its words, whispered; a plain line (`[tachyon]
+Ada: arrived at 10, 64, -3 (0.4 from it)`); or not at all. Orders to many bots
+are not, or the chat would flood; `list` shows how each goes. A command's own
+answer (`[tachyon] Ada: going to ...`) is always said.
 
 **Who can do what.** Operators give orders to every bot. Any other player gives
 orders to the bots that are theirs: whoever brought a bot in owns it, and an
@@ -73,9 +79,13 @@ model someone pays for.
 Name it in the chat: `Ada, come here`, `Ada hunt three cows`, `what do you see,
 Ada?`. It answers in the chat, in the language it was spoken to in, and does what
 it can with its tools: come to you, follow, go somewhere, stop, hunt, kill with
-its bow, hit what is near, clear a box, put something in its hand, put on or take
-off armor, eat, toss things (to you, too), change its trash list, tell how it is,
-look around, tell where and how it last died. When something it was asked is
+its bow, hit what is near, gather a material ("get me some dirt", "chop 20
+logs", "I need seeds"), clear a box it was asked to clear, put something in its
+hand, put on or take off armor, eat, toss things (to you, too), change its trash
+list, tell how it is, look around, tell where and how it last died. Its brain's
+`clear` is for an area someone asked to have cleared, never to get a material,
+and it refuses a box that holds blocks players placed: then it says a person can
+order it with `/tachyon clear`. When something it was asked is
 over (done, or given up), it says so, in its words. Each player can speak to bots
 a few times a minute (`per_minute`).
 
@@ -84,13 +94,25 @@ about: how going back for its things after a death went, a player who keeps
 hitting it, a full backpack, and what it could not deal with by itself ([What
 it does by itself](#what-it-does-by-itself): cornered, drowning, buried for
 good, hungry with nothing to eat, out of arrows, a tool about to break,
-phantoms). Its `notices` setting says how: `brain` (the default), its brain says
+phantoms); and what the mod must tell: that it died and is back (or left), that
+an order a command gave it is over (to whoever gave it), that its brain could not
+think. Its `notices` setting says how: `brain` (the default), its brain says
 it in its own words (one call to its model, as when it tells how an order went),
 whispered to its owner alone (`Ada whispers to you: ...`), since these say where
 it died and where its things lie; `plain`, a line to its owner only (`[tachyon]
 Ada: got back all 230 items it dropped when it died at 12 64 -30`), no call;
-`off`, nothing. A bot with no brain set up says it plainly. Each kind of notice
-is said once every 10 minutes at most, and only while its owner is in the game.
+`off`, nothing. A bot with no brain set up says it plainly, and so does one whose
+brain is what failed, or that left the game. Each kind of notice is said once
+every 10 minutes at most (a death or an order's end, each time), and only while
+its owner is in the game.
+
+**Technical lines.** Players read no line of the mod's own but its notices and
+its commands' answers. With `verbose` on (off by default), its owner also gets,
+as they happen, the lines the server's log has about the bot, with coordinates:
+what it does by itself (`[tachyon] Ada backs off: 5 health, a zombie 3 blocks
+away`), the tools its brain calls and what they answered, its death as the log
+says it (`[tachyon] Ada died (Ada was slain by Zombie) and is back at 12 64
+-30`), an order's end. It is for finding out what went wrong.
 
 **A player who keeps hitting it** (3 hits in a row, each within 20 s of the one
 before) is told to its owner: `Steve hit it 3 times in 6 s (7 health lost); it
@@ -113,10 +135,19 @@ it in those 2 seconds, and what is said to it, it takes up once it is back; a bo
 that follows it waits, and follows it again. A bot that dies
 over and over (in lava, or where something kills it as soon as it is back) comes
 back 5 times in 5 minutes at most: the 6th time, it leaves the game instead. With
-`respawn` false it leaves the game when it dies, as it did in 0.1.0. Either way
-its owner, if online, gets a line: `[tachyon] Ada died (Ada was slain by Zombie)
-and is back at 12 64 -30`, or `... and left: 5 deaths in 5 minutes`. A bot that
+`respawn` off it leaves the game when it dies, as it did in 0.1.0. Either way
+its owner, if online, hears it as its notices say: `[tachyon] Ada: was slain by
+Zombie, and is back at its bed` (at its respawn anchor, its spawn point, the
+world's spawn, and why there when its bed was gone or blocked), or `... and left:
+5 deaths in 5 minutes` (plainly: it has no brain left to say it). A bot that
 left is brought back with `spawn`, whole, as a respawn would bring it.
+
+A spawn point set with `/spawnpoint` where the player stood on a slab, a dirt
+path or deep snow is the block the feet were in, that very block, and the game
+sends a player whose spawn point it is to the world's spawn instead, calling it
+blocked. A bot tries the spot one block up first (by the game's own rule: it and
+the block over it neither solid nor a liquid), and keeps its spawn point; blocked
+there too, it goes to the world's spawn, as the game decides.
 
 **It goes back for what it dropped**, by itself, 2 seconds after it is back (what
 a player drops at a death vanishes after 5 minutes): it walks to where it died
@@ -127,7 +158,7 @@ taken by someone)`). It tries twice at most for one place, within about 6
 minutes of the death; never after a death in lava (it all burned), in the void
 or by drowning (it lies under the water that drowned it); and only in the
 dimension it came back in (crossing to another comes later). Any order given to
-it ends the trip, and it says what it left behind. With `recover_items` false it
+it ends the trip, and it says what it left behind. With `recover_items` off it
 does not go.
 
 **It remembers its last death**, in its data: where, how (the chat's line, who
@@ -138,7 +169,7 @@ died. Its brain knows for 10 minutes after, and asks for it any time with its
 **When the server stops**, the bots in the game are recorded with the world
 (`<world>/tachyon/roster.json`: name, dimension, position, rotation), and once it
 has started again each one comes back where it was, its owner's as before, unless
-its `come_back` is false. A server that crashes records them too, as it stops. A bot removed before the stop does not come back; one
+its `come_back` is off. A server that crashes records them too, as it stops. A bot removed before the stop does not come back; one
 whose dimension is gone (a mod's, removed) comes back at the world's spawn. A
 broken roster is moved aside as `roster.json.bad-<time>`, and nobody comes back.
 
@@ -146,7 +177,7 @@ broken roster is moved aside as `roster.json.bad-<time>`, and nobody comes back.
 the night: the players skip it by sleeping without them, and the "n/m players
 sleeping" line counts only the players; and no phantom is spawned because of a
 bot (phantoms come for a player who has not slept for three days, and once there
-they attack any player near, bots too). With it false a bot counts as any player
+they attack any player near, bots too). With it off a bot counts as any player
 does, and the night is skipped only if enough bots sleep too; then phantoms may
 come for it after three nights without a bed, and the first time one hits it its
 owner is told (a night in a bed ends it, but that skips the night for everyone,
@@ -260,6 +291,45 @@ nothing to toss (once in 10 minutes at most: every word to it is a paid call to 
 model); with `notices` plain, its owner gets a line instead, with no call, and
 with `notices` off, nothing.
 
+## Gathering
+
+"Get me some dirt": it breaks blocks of that kind around it, nearest first, with
+the tool that makes them drop what they are (the fastest of those; with none that
+speeds a block up, a hand that wears nothing, since a tool spends a use on any
+block), picks up what they drop, and stops once it carries as many more as it was
+told (16 when not told; 256 at most from its brain): of the item named, or, with
+none, of blocks broken. Asked for dirt, it takes grass blocks, podzol, mycelium
+and dirt paths too (they drop dirt), and counts the dirt; for cobblestone, stone;
+for cobbled deepslate, deepslate. Seeds come from cutting grass
+(`gather_seeds`, `/tachyon gather <who> seeds`): about one in eight plants.
+
+It takes what a player in its place would. **Only blocks in the open**: with a
+face to the air, that face under the sky or in its sight from where it stands;
+never a block seen through rock, and never ores (a search for them all around is
+the x-ray; they are mined). It looks 16 blocks each way, 4 down and 6 up, in the
+loaded chunks; with none there, it **goes out looking** (legs of 48 blocks the way
+it was told or faces, turning right when three get it nowhere, 300 blocks or 3
+minutes at most, twice an errand), looking around as it walks.
+
+**Never a piece of a build.** The server keeps where players placed blocks (each
+level with the world, 100,000 places at most; a place is forgotten when its block
+is broken, blown up, burns or washes away), and it leaves those alone; and, for a
+build older than the mod, any block that touches a building block (planks,
+stairs, slabs, doors, wool, fences, walls, trapdoors, beds, signs, glass, bricks,
+torches, lanterns, chests, crafting tables, furnaces) or a block a player placed;
+and logs that are not a tree's (the logs joined to it must touch leaves that grew
+there and no building block: a log cabin is logs too). Only a person's
+`/tachyon clear` breaks a build.
+
+It stops when it has enough, when its backpack is full, when it carries no tool
+that makes those blocks drop anything, or when a search finds none; every way it
+ends says how many it got, and what it left alone and why: `gathered 16 dirt
+(broke 16 blocks)`, `broke 0 of 3 stone; I carry no tool that makes stone drop
+anything`, `broke 2 of 4 sand; I saw no more sand in the open: I looked 300
+blocks to the east; left alone 12 that players placed or built with`. Several
+bots gathering together share what is around, each taking the block it goes for.
+What it gathers is not its trash meanwhile (dirt is on the list).
+
 ## What it does by itself
 
 A bot's brain thinks only when it is spoken to, and a call to a model takes
@@ -268,7 +338,7 @@ its brain, as Masurium's bots did, with their numbers. What it is doing is set
 aside while it does, and taken up again after, where it was: an order is never
 dropped for it. Its owner hears only of what it could not deal with, with the
 numbers ([What it tells you unasked](#talking-to-a-bot)); the rest goes to the
-server's log, a line a time.
+server's log, a line a time (and to its owner too, with its `verbose` on).
 
 ### Fighting back
 
@@ -339,8 +409,10 @@ something over it (ice, a ledge, a cave's roof), along a way to the nearest open
 water and up from there; and goes back to what it was doing once its air is 250
 again. Drowning with no way up, its owner is told.
 
-Buried (sand or gravel fell on it, and the game hurts it for being inside a block),
-it breaks what covers its head, then what fills the space of its feet, before
+Buried (sand or gravel fell on it, and the game hurts it for being inside a block,
+or a look once a second finds its feet inside one: gravel that lands where its feet
+are leaves its eyes free and hurts nothing, and it could not walk out of it), it
+breaks what covers its head, then what fills the space of its feet, before
 anything else: with its hands, the best tool it carries for the block, and the time
 the block takes. A block it cannot break (bedrock, a protected spawn), or cannot
 break in 30 s, is given up, and its owner told.
@@ -369,19 +441,20 @@ one.
 
 | key | label (in the menu) | group | level | who changes it | default | what |
 |---|---|---|---|---|---|---|
-| `sprint` | Sprint when walking | Walking | basic | owner, operators | `true` | whether it may sprint when walking |
-| `respawn` | Come back after dying | Life | basic | owner, operators | `true` | whether it comes back by itself when it dies (5 times in 5 minutes at most); false: it leaves the game |
-| `come_back` | Come back after a restart | Life | basic | owner, operators | `true` | whether it comes back by itself, where it was, when the server starts again |
-| `recover_items` | Go back for its things | Life | basic | owner, operators | `true` | whether it goes back for what it dropped when it died, once it is back (2 tries within 6 minutes of the death at most; never after lava, the void or drowning) |
-| `shoot_creepers` | Shoot creepers | Life | basic | owner, operators | `true` | whether it shoots creepers 10 to 25 blocks away with its bow by itself; without it, it only runs from those that come close ([Creepers](#creepers)) |
-| `retreat_when_hurt` | Back off when badly hurt | Life | basic | owner, operators | `true` | whether it breaks off what it is doing and backs off when badly hurt (6 health or less, or poisoned) with something hostile at hand, until it makes out nothing hostile within 24 blocks (a minute at most) ([Badly hurt](#badly-hurt)) |
-| `ignore_for_sleep` | Left out of sleeping | Night | basic | operators | `true` | whether the players skip the night without it (it does not count for the sleeping percentage) and no phantoms spawn because of it |
-| `brain_lite` | Lite brain | Brain | advanced | owner, operators | `false` | whether its brain is sent only the core tools, for a small local model ([The brain](#the-brain)) |
-| `notices` | Notices to its owner | Brain | basic | owner, operators | `brain` | how it tells its owner what nobody asked about (how going back for its things went, a player hitting it, a full backpack, what it could not deal with): brain, in its own words, to its owner alone (a call to its model); plain, a fixed line; off, not at all ([Talking to a bot](#talking-to-a-bot)) |
-| `dress_alone` | Put on better armor | Gear | basic | owner, operators | `true` | whether it puts on better armor it carries by itself (it looks every 10 s) |
-| `trash_at_once` | Toss trash at once | Gear | advanced | owner, operators | `false` | whether it tosses its trash as soon as it picks it up; false: only when its backpack is full ([Tossing](#tossing-and-trash)) |
-| `hunt_players` | Fight players by name | Fighting | advanced | operators | `false` | whether its brain's attack and kill may go after a player named to them |
-| `defend_from_players` | Defend from players | Fighting | advanced | operators | `false` | whether it also fights players who attack it or its owner, as it fights mobs that do; without it, a player's hits only bring its owner a notice ([Fighting back](#fighting-back)) |
+| `sprint` | Sprint when walking | Walking | basic | owner, operators | `on` | It sprints when it walks: on flat ground, and not on the last steps. |
+| `respawn` | Come back after dying | Life | basic | owner, operators | `on` | When it dies, it comes back by itself 2 seconds later, 5 times in 5 minutes at most. When it is off, a bot that dies leaves the game. |
+| `come_back` | Come back after a restart | Life | basic | owner, operators | `on` | When the server starts again, it comes back by itself, where it was. |
+| `recover_items` | Go back for its things | Life | basic | owner, operators | `on` | Once it is back from a death, it goes back for what it dropped: 2 tries within 6 minutes of the death at most, and never after lava, the void or drowning. |
+| `shoot_creepers` | Shoot creepers | Life | basic | owner, operators | `on` | It shoots creepers 10 to 25 blocks away with its bow, by itself. When it is off, it only runs from those that come close. ([Creepers](#creepers)) |
+| `retreat_when_hurt` | Back off when badly hurt | Life | basic | owner, operators | `on` | Badly hurt (6 health or less, or poisoned) with something hostile at hand, it breaks off what it is doing and backs off, until it makes out nothing hostile within 24 blocks (a minute at most). ([Badly hurt](#badly-hurt)) |
+| `ignore_for_sleep` | Left out of sleeping | Night | basic | operators | `on` | The players skip the night without it: it does not count for the sleeping percentage, and no phantoms spawn because of it. |
+| `brain_lite` | Lite brain | Brain | advanced | owner, operators | `off` | Its brain is sent only the core tools, which a small local model chooses from better. ([The brain](#the-brain)) |
+| `notices` | Notices to its owner | Brain | basic | owner, operators | `brain` | It tells its owner what nobody asked about (how going back for its things went, a player hitting it, a full backpack, what it could not deal with, a death, an order given by a command that is over) in its own words, whispered to its owner alone (brain: a call to its model), in a fixed line (plain), or not at all (off). ([Talking to a bot](#talking-to-a-bot)) |
+| `verbose` | Technical lines | Brain | advanced | owner, operators | `off` | Its owner also gets the technical lines the server's log has about it (what it does by itself, with coordinates), for finding out what went wrong. When it is off, its owner hears only its notices. ([Talking to a bot](#talking-to-a-bot)) |
+| `dress_alone` | Put on better armor | Gear | basic | owner, operators | `on` | It puts on better armor it carries, by itself (it looks every 10 seconds). |
+| `trash_at_once` | Toss trash at once | Gear | advanced | owner, operators | `off` | It tosses its trash as soon as it picks it up. When it is off, it tosses it only when its backpack is full. ([Tossing](#tossing-and-trash)) |
+| `hunt_players` | Fight players by name | Fighting | advanced | operators | `off` | Its brain's attack and kill may go after a player named to them. |
+| `defend_from_players` | Defend from players | Fighting | advanced | operators | `off` | It also fights players who attack it or its owner, as it fights mobs that do. When it is off, a player's hits only bring its owner a notice. ([Fighting back](#fighting-back)) |
 
 A bot's value is the first of four layers that has one:
 
@@ -394,7 +467,7 @@ A bot's value is the first of four layers that has one:
    value of its own. A broken file is moved aside as `defaults.json.bad-<time>`,
    and then there are none.
 3. **The server's default in `tachyon.properties`**: `default.<key>=...`
-   (`default.sprint=false`). After editing the file, `/tachyon brain reload`.
+   (`default.sprint=off`). After editing the file, `/tachyon brain reload`.
 4. **The mod's default**, in the table.
 
 `/tachyon settings` and the menu say which one a value comes from: `its own`,
@@ -402,10 +475,13 @@ A bot's value is the first of four layers that has one:
 mod's default`. `/tachyon defaults` lists the server's defaults the same way.
 
 A bot's owner and operators may change its settings; a few are only the
-operators' (the table says which). A switch takes `true` or `false` (or `on`,
-`off`, `yes`, `no`); a number, plain digits within its range, and one out of it
-is refused with the range; a choice, one of its options by name (`notices plain`),
-and anything else is refused with the options.
+operators' (the table says which). A switch is `on` or `off` (`true`, `false`,
+`yes` and `no` are taken too); a number, plain digits within its range, and one
+out of it is refused with the range; a choice, one of its options by name
+(`notices plain`), and anything else is refused with the options. `/tachyon
+settings` lists each by its label with its key in brackets (`Sprint when walking
+[sprint]: on (the mod's default). It sprints when it walks...`), and refusals
+name a setting by its label (`only operators change "Left out of sleeping"`).
 
 ## The config menu
 
@@ -428,8 +504,11 @@ from and how to change it:
 - a choice is a name tag, the options listed under it: left click the next
   option, right click the one before, going round;
 - **Q** over a setting puts it back to the default (clears the bot's own value,
-  or on the Server defaults page the one set in game);
-- a setting only operators may change shows to others as a barrier, saying so.
+  or on the Server defaults page the one set in game), and says which default
+  that is and its value: `Q: back to the server default set in game (off)`, `Q:
+  back to the mod's default (on)`;
+- a setting only operators may change shows to others as a barrier, saying so
+  by its label.
 
 The Server defaults page (operators) is laid out the same way and changes the
 defaults set in game. Every change goes through the same checks as the commands,
@@ -466,9 +545,9 @@ Some examples:
 | Anthropic | `anthropic` | `https://api.anthropic.com/v1` | `claude-haiku-4-5` | yours |
 
 The model has to support tool calling. A small local model chooses badly among
-many tools: `/tachyon set <who> brain_lite true` sends it only the core ones
-(walking, stopping, hunting, clearing, how it is, what is around), and not the
-others: those for killing, attacking, its hands, armor, food and tossing,
+many tools: `/tachyon set <who> brain_lite on` sends it only the core ones
+(walking, stopping, hunting, gathering, clearing, how it is, what is around),
+and not the others: those for killing, attacking, its hands, armor, food and tossing,
 `last_death`, and most of those still to come.
 
 Any of `url`, `model`, `key` and `timeout` can be set for one bot only, as
@@ -524,9 +603,24 @@ about 200 times. In the pen, 81 of the 100 hunters were done within two minutes 
 the rest stopped hurt, crowded (the version before did the same). In a fight they
 work: 100 bots with iron swords among 30 zombies (all dead within 10 s) cost 3.1 ms
 a tick over that minute. What a bot's abilities do in other entities' ticks (a hit
-taken, a pickup) is in the whole tick, not in the bots' share. A busy modpack leaves
-less room than a plain server: measure yours with `/tachyon stats` and
-`/tick query`.
+taken, a pickup) is in the whole tick, not in the bots' share.
+
+Gathering, measured the same way (samples of 20 s, the 0.3.0 dev server):
+
+| bots | doing | tick | the bots' share | its worst tick |
+|---|---|---|---|---|
+| 100 | standing, no mob about (this version and the one before taking turns, 6 samples each: 5.3–5.7 ms before) | 8–10 ms | 4.7–5.5 ms | 16–19 ms |
+| 100 | gathering 64 dirt each on a 112×112 grass field | 11–13 ms | 6.2–7.7 ms | 21–33 ms |
+| 100 | gathering what is nowhere around, out looking over the world's own ground | 12–18 ms | 4.3–5.0 ms | 17–29 ms |
+
+A look around for blocks is a sweep of the chunk sections within 16 blocks, a
+section with none of the kinds skipped whole; a bot looks when what it knows of
+is spent (every half second at most, every 2 s while out looking, each on a tick
+of its own), and no more than 4 bots look in one tick. The searches of the 100
+out looking took 6 to 10 ms each on their thread, 3 waiting at most. What was
+added to a bot standing idle (a look once a second for its feet inside a block) is
+a block read a second. A busy modpack leaves less room than a plain server:
+measure yours with `/tachyon stats` and `/tick query`.
 
 ## Where to use it
 

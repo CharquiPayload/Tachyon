@@ -40,4 +40,16 @@ class NoticesTest {
         assertEquals("Brain", s.group);
         assertEquals(Settings.Who.OWNER, s.who);
     }
+
+    @Test
+    @DisplayName("verbose: a switch, off by default, advanced, in the Brain group, its owner's to change")
+    void verbose() {
+        Settings.Setting s = Abilities.settings().get(Notices.VERBOSE);
+        assertTrue(s.isSwitch);
+        assertEquals("off", s.words(s.byDefault));
+        assertEquals("Technical lines", s.label);
+        assertEquals(Settings.Level.ADVANCED, s.level);
+        assertEquals("Brain", s.group);
+        assertEquals(Settings.Who.OWNER, s.who);
+    }
 }
