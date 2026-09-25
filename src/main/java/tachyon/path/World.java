@@ -53,6 +53,16 @@ public interface World {
     }
 
     /**
+     * Is anything known of this column? A world read from loaded chunks reads the rest as
+     * rock (so a search does not wander into what it cannot see); this tells that rock from
+     * real rock, for a destination too far off to be judged yet. Worlds that know every
+     * column (the tests' drawings) inherit the "yes".
+     */
+    default boolean known(int x, int z) {
+        return true;
+    }
+
+    /**
      * Can one stand here?
      * The player is two blocks tall, so two free blocks with something solid below are
      * needed. Being inside water also counts: one floats.

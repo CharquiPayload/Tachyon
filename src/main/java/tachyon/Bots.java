@@ -13,6 +13,7 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.tree.CommandNode;
 import com.mojang.logging.LogUtils;
 import tachyon.mixin.PlayerListAccess;
+import tachyon.path.Leg;
 import tachyon.path.Route;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -33,6 +34,7 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.portal.DimensionTransition;
 import net.minecraft.world.phys.BlockHitResult;
@@ -70,6 +72,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -158,12 +161,20 @@ public final class Bots {
     private static final int JOIN_WITHIN = 16;
     /** A follower's goal: any tile this close to the ground under whom it follows. */
     private static final double FOLLOW_NEAR = 2.0;
+    /** A follower that builds up to whom it follows looks at this many tiles, Masurium's. */
+    private static final int FOLLOW_UP_NODES = 40_000;
     /** Half a player's box across: it is 0.6 wide. */
     private static final double HALF_WIDTH = 0.3;
     /** The chunks read around a search: this margin, at most these many. */
     private static final int MARGIN = 24, MAX_CHUNKS = 400;
     /** A search's budget on its own thread; past it, the stretch found is walked. */
     private static final long SEARCH_MS = 2000;
+    /**
+     * The tiles a trip's legs may look at, Masurium's: the first, 20,000 (60,000 when it
+     * builds upward more than 3 blocks); the legs after it, 40,000, since a mountain between
+     * burned 20,000 on its ridge.
+     */
+    private static final int FIRST_LEG_NODES = 20_000, FIRST_LEG_UP_NODES = 60_000, LEG_NODES = 40_000;
 
     private static final Map<String, Bot> ALL = new LinkedHashMap<>();
     /**
@@ -207,10 +218,12 @@ public final class Bots {
         // What it walks, and what for.
         List<Route.Point> path;
         int next;
-        boolean partial;
-        Future<Route.Result> pending;
-        /** Where a goto goes: a partial route is walked and searched again from its end. */
+        /** The search on its way, if any; and its options, which say what the route it brings may do. */
+        Future<Leg.Found> pending;
+        Route.Options pendingOptions;
+        /** Where a goto goes, and its trip there: walked a leg at a time, judged as a whole (see Trip). */
         BlockPos target;
+        Trip trip;
         ServerPlayer following;
         long plannedAt = -REPLAN_TICKS;
         /** Where whom it follows, and itself, stood at its last search (NaN: search anew). */
@@ -218,10 +231,27 @@ public final class Bots {
 
         // How the walk goes.
         int ticks, jumps, replans;
-        Vec3 lastPos;
+        /** At the last look for being stuck: which point it went to, and how far from it it was. */
+        int lastNext;
+        double lastGap;
         /** The door it opened and has not closed yet, and which side of it it was on. */
         BlockPos doorOpen;
         double doorSide;
+        /** The last point's slack in this walk: a job that must stand right on it asks for less (see arriveWithin). */
+        double nearEnd = NEAR_END;
+        /** Whether the route it walks was searched with building, or digging, allowed: its steps may place or dig. */
+        boolean walkBuilds, walkBreaks;
+        /** A tower going up: where its block goes, and the ticks since it jumped (see Scaffolding). */
+        BlockPos towerAt;
+        int towerTicks;
+        /** The block it digs through, the ticks it has been at it, and the face struck (see Tunnelling). */
+        BlockPos digging;
+        int digTicks;
+        Direction digFace;
+        /** The last tick the walk went to a block (placing, digging): time spent on a block is not being stuck. */
+        long workedAt = -STUCK_TICKS;
+        /** Where its legs got stuck lately: not stood on by its searches for 90 s (see StuckSpots). */
+        final StuckSpots stuck = new StuckSpots();
 
         /** What it does beyond walking (hunting, clearing), or null. */
         Job job;
@@ -296,7 +326,7 @@ public final class Bots {
     }
 
     /** An order set aside while a reflex holds the body: taken up again when it lets go. */
-    private record Aside(Job job, BlockPos target, ServerPlayer following, Order order) {
+    private record Aside(Job job, BlockPos target, Trip trip, ServerPlayer following, Order order) {
     }
 
     /** A standing order: a job that detours wait for, and who is told when it is over. */
@@ -519,7 +549,14 @@ public final class Bots {
         // (A name that died and left saved a dead body: it is made whole as its save is
         // read, before the level shows it to anyone. See BotPlayer.readAdditionalSaveData.)
         server.getPlayerList().placeNewPlayer(new BotConnection(), body, CommonListenerCookie.createInitial(profile, false));
-        if (at != null) body.teleportTo(level, at.x, at.y, at.z, yaw, 0);
+        if (at != null) {
+            body.teleportTo(level, at.x, at.y, at.z, yaw, 0);
+            // The chunks round a player are loaded where the chunk map last saw it, which a
+            // player's client moves on and a bot's body moves in its own tick: a bot brought in
+            // far from anyone (by the console, or back after a restart) stood in chunks nobody
+            // loaded, was never ticked, and never moved on. Told here where it is now.
+            level.getChunkSource().move(body);
+        }
         // Its file, read here on the server's thread as the player's own save just was:
         // a few hundred bytes, once, as it comes in.
         Bot p = new Bot(body, name, BotData.load(BotData.folder(server), name));
@@ -584,13 +621,18 @@ public final class Bots {
     // are made the same way; one that starts a job, with orderJob. The abilities hear of
     // each through Ability.ordered.
 
+    /**
+     * A trip to {@code to}: a leg at a time, round what is in the way, building or digging
+     * through when it may and there is no way on foot (see {@link Trip}, {@link Leg}).
+     */
     static void orderGoto(Bot p, BlockPos to, Order by) {
         clearFor(p);
         p.order = by;
         p.following = null;
         p.target = to;
+        p.trip = new Trip(to);
         p.replans = 0;
-        plan(p, to, "going to " + to.toShortString());
+        planLeg(p);
         Abilities.ordered(p);
     }
 
@@ -744,7 +786,7 @@ public final class Bots {
             Job j = p.job;
             p.job = null;
             if (j != null) j.end(p);
-            p.aside = new Aside(j, p.target, p.following, p.order);
+            p.aside = new Aside(j, p.target, p.trip, p.following, p.order);
             p.target = null;
             p.following = null;
             p.order = null;
@@ -778,6 +820,7 @@ public final class Bots {
         halt(p, "standing");
         p.job = a.job();
         p.target = a.target();
+        p.trip = a.trip();
         p.following = a.following();
         p.order = a.order();
         goOn(p);
@@ -792,7 +835,7 @@ public final class Bots {
     private static void goOn(Bot p) {
         if (p.target != null) {
             p.replans = 0;
-            plan(p, p.target, "going to " + p.target.toShortString());
+            planLeg(p);
         } else if (p.following != null) {
             p.plannedAt = -REPLAN_TICKS;
             p.leaderX = Double.NaN;
@@ -1144,7 +1187,7 @@ public final class Bots {
                 q.leaderX = Double.NaN;
             }
             if (q.aside != null && q.aside.following() == old) {
-                q.aside = new Aside(q.aside.job(), q.aside.target(), now, q.aside.order());
+                q.aside = new Aside(q.aside.job(), q.aside.target(), q.aside.trip(), now, q.aside.order());
             }
         }
     }
@@ -1359,6 +1402,7 @@ public final class Bots {
         if (!body.isAlive()) return;
         if (p.heldBy == null) {
             follow(p, now);
+            retryLeg(p, now);
             Job j = p.job;
             if (j != null && !j.think(p, now) && p.job == j) {
                 endJob(p);
@@ -1421,25 +1465,19 @@ public final class Bots {
         return ALL.values();
     }
 
-    /** A search from where the body stands to {@code to}, on a routes thread. */
-    private static void plan(Bot p, BlockPos to, String doing) {
-        plan(p, to, 0, doing);
-    }
-
     /**
      * With {@code near} over 0 the goal is a ring and not a tile: within {@code near} of
      * the ground under {@code to}, as Masurium's client Follower aims. Whom it follows may be
      * in the air (jumping, flying), where nobody can stand.
      */
     static void plan(Bot p, BlockPos to, double near, String doing) {
-        Route.Point b = new Route.Point(to.getX(), to.getY(), to.getZ());
-        plan(p, to, near > 0 ? world -> Route.Meta.near(ground(world, b), near) : null, doing);
+        plan(p, to, near, walkOptions(p, false, Route.Options.byDefault().maxNodes()), doing);
     }
 
     /** The same ring, searched with options of its own (a chase's longer fall: see Hunt.chase). */
     static void plan(Bot p, BlockPos to, double near, Route.Options wanted, String doing) {
         Route.Point b = new Route.Point(to.getX(), to.getY(), to.getZ());
-        plan(p, to, world -> Route.Meta.near(ground(world, b), near), wanted, doing);
+        plan(p, to, near > 0 ? world -> Route.Meta.near(ground(world, b), near) : null, wanted, doing);
     }
 
     /**
@@ -1448,8 +1486,8 @@ public final class Bots {
      */
     static void plan(Bot p, BlockPos to, Function<SnapshotWorld, Route.Meta> goal, String doing) {
         // Partial routes: a stretch that gets closer is walked and searched on from its
-        // end, which is what a follower needs and a goto does too (see steer).
-        plan(p, to, goal, new Route.Options(3, Route.Options.byDefault().maxNodes(), false, true), doing);
+        // end, which is what a follower needs and a job's walk too.
+        plan(p, to, goal, walkOptions(p, false, Route.Options.byDefault().maxNodes()), doing);
     }
 
     /**
@@ -1458,31 +1496,104 @@ public final class Bots {
      * the search's time budget, which is the server's.
      */
     static void plan(Bot p, BlockPos to, Function<SnapshotWorld, Route.Meta> goal, Route.Options wanted, String doing) {
+        Route.Point b = new Route.Point(to.getX(), to.getY(), to.getZ());
+        Vec3 at = p.body.position();
+        send(p, to, wanted, (world, options) -> {
+            // (whereAmI() and the goal read the snapshot, so they run here, off the
+            // server's thread.)
+            Route.Point a = whereAmI(world, at);
+            Route.Result r = goal != null
+                    ? Route.search(world, a, goal.apply(world), options)
+                    : Route.search(world, a, b, options);
+            return new Leg.Found(r, Leg.Kind.WALK, null);
+        }, doing);
+    }
+
+    /**
+     * The walk's search options: partial routes (a stretch that gets closer is walked and
+     * searched on from its end), a fall as long as its health allows (Masurium's safeFall),
+     * digging through its break list when its setting says so, building when {@code build}.
+     */
+    static Route.Options walkOptions(Bot p, boolean build, int nodes) {
+        return new Route.Options(safeFall(p.body.getHealth()), nodes, build, true).breaking(Tunnelling.advancing(p));
+    }
+
+    /**
+     * How many blocks of fall a route may take, by the health left, Masurium's: a fall past
+     * 3 costs a point a block, so 3, and a block more for every 4 health, 12 at most. Half
+     * the health is left as a margin: a route may chain several falls.
+     */
+    static int safeFall(float health) {
+        return Math.max(3, Math.min(12, 3 + (int) Math.floor(health) / 4));
+    }
+
+    /**
+     * The walk's slack at the last point of the route just planned: {@link #NEAR_END}
+     * unless a job asks for less (an item to stand on) or more. Asked after {@code plan},
+     * which sets it back.
+     */
+    static void arriveWithin(Bot p, double slack) {
+        p.nearEnd = slack;
+    }
+
+    /**
+     * A search sent to a routes thread, {@code find} run there over the loaded chunks
+     * around the body and {@code to}: the snapshot taken here, with the tiles it got stuck
+     * on lately and, for a route that may dig, its break list. What it finds is walked once
+     * it comes back ({@link #adopt}).
+     */
+    private static void send(Bot p, BlockPos to, Route.Options wanted,
+                             BiFunction<SnapshotWorld, Route.Options, Leg.Found> find, String doing) {
         if (p.pending != null) p.pending.cancel(true);
         long started = System.nanoTime();
-        BlockPos from = new BlockPos(p.body.getBlockX(), floorY(p), p.body.getBlockZ());
-        SnapshotWorld world = SnapshotWorld.around(p.body.serverLevel(), from, to, MARGIN, MAX_CHUNKS);
+        BotPlayer body = p.body;
+        BlockPos from = new BlockPos(body.getBlockX(), floorY(p), body.getBlockZ());
+        SnapshotWorld world = SnapshotWorld.around(body.serverLevel(), from, to, MARGIN, MAX_CHUNKS)
+                .vetoing(p.stuck.now(body.level().dimension(), body.getServer().getTickCount()));
+        if (wanted.canBreak()) world.breaking(Tunnelling.blocks(p));
+        Route.Options options = wanted.withDeadline(SEARCH_MS);
         long took = System.nanoTime() - started;
         synchronized (STATS) {
             STATS.snapshots++;
             STATS.snapshotNanos += took;
             STATS.maxSnapshotNanos = Math.max(STATS.maxSnapshotNanos, took);
         }
-        Vec3 at = p.body.position();
-        Route.Point b = new Route.Point(to.getX(), to.getY(), to.getZ());
-        Route.Options options = wanted.withDeadline(SEARCH_MS);
+        p.pendingOptions = options;
+        p.nearEnd = NEAR_END;
         p.pending = ROUTES.submit(() -> {
-            // (whereAmI() and ground() read the snapshot, so they run here, off the
-            // server's thread.)
             long t0 = System.currentTimeMillis();
-            Route.Point a = whereAmI(world, at);
-            Route.Result r = goal != null
-                    ? Route.search(world, a, goal.apply(world), options)
-                    : Route.search(world, a, b, options);
-            STATS.search(System.currentTimeMillis() - t0, r.looked());
-            return r;
+            Leg.Found f = find.apply(world, options);
+            STATS.search(System.currentTimeMillis() - t0, f.route().looked());
+            return f;
         });
         p.doing = doing;
+    }
+
+    /**
+     * The next leg of its trip, searched from where it stands (see {@link Leg}): the first
+     * finds where the trip ends, the others go on toward it. It may build if its setting says
+     * so and it carries blocks; with more tiles to look at when it builds upward, since the
+     * estimate does not see height and a tower on top of a wall floods the plain first.
+     */
+    private static void planLeg(Bot p) {
+        Trip t = p.trip;
+        BotPlayer body = p.body;
+        boolean blocks = Scaffolding.carries(body);
+        boolean build = blocks && Settings.bool(p, Scaffolding.BUILD);
+        Route.Point aim = t.aim();
+        int nodes = t.first() ? (build && aim.y() > floorY(p) + 3 ? FIRST_LEG_UP_NODES : FIRST_LEG_NODES) : LEG_NODES;
+        Route.Options op = walkOptions(p, build, nodes);
+        boolean afterStuck = t.afterStuck;
+        t.afterStuck = false;
+        Vec3 at = body.position();
+        boolean inWater = body.isInWater();
+        Route.Point asked = new Route.Point(t.asked.getX(), t.asked.getY(), t.asked.getZ());
+        Route.Point to = t.destination;
+        send(p, p.target, op, (world, options) -> {
+            Leg.Ask a = new Leg.Ask(whereAmI(world, at), at.x, at.z, inWater, options, blocks, afterStuck);
+            return to == null ? Leg.first(world, a, asked) : Leg.next(world, a, to);
+        }, t.first() ? "going to " + t.asked.toShortString()
+                : String.format(Locale.ROOT, "going to %s: %.0f blocks to go", t.asked.toShortString(), t.left(at)));
     }
 
     /**
@@ -1544,7 +1655,11 @@ public final class Bots {
         p.selfX = p.body.getX();
         p.selfZ = p.body.getZ();
         p.replans = 0;
-        plan(p, leader.blockPosition(), FOLLOW_NEAR, doing);
+        // Building to keep up is its setting's (build_while_following), and only with blocks
+        // to build with; upward, with more tiles to look at, as a trip's first leg has.
+        boolean build = Scaffolding.mayBuildFollowing(p);
+        int nodes = build && leader.getBlockY() > floorY(p) + 3 ? FOLLOW_UP_NODES : Route.Options.byDefault().maxNodes();
+        plan(p, leader.blockPosition(), FOLLOW_NEAR, walkOptions(p, build, nodes), doing);
     }
 
     /**
@@ -1554,7 +1669,8 @@ public final class Bots {
      * fails with "where I am is not a spot where one can stand", again each second, which a
      * follower walks as a stutter. The tile under the centre first, then those under the
      * box's corners; one up (the feet are inside a partial block's cell: a path, a slab)
-     * and one down (in a jump, or pushed off an edge).
+     * and one down (in a jump, or pushed off an edge). A tile it got stuck on lately is
+     * where it stands all the same.
      */
     private static Route.Point whereAmI(SnapshotWorld world, Vec3 at) {
         int y0 = (int) Math.floor(at.y);
@@ -1563,7 +1679,7 @@ public final class Bots {
             for (double dx : offsets) {
                 for (double dz : offsets) {
                     int x = (int) Math.floor(at.x + dx), z = (int) Math.floor(at.z + dz);
-                    if (world.canStand(x, y, z)) return new Route.Point(x, y, z);
+                    if (world.canStandWithoutVeto(x, y, z)) return new Route.Point(x, y, z);
                 }
             }
         }
@@ -1581,45 +1697,147 @@ public final class Bots {
         return at;
     }
 
-    /** A finished search becomes the route to walk. */
+    /** A finished search becomes the route to walk; a trip's leg, judged by the trip (see legFound). */
     private static void adopt(Bot p) {
         if (p.pending == null || !p.pending.isDone()) return;
-        Route.Result r;
+        Leg.Found f;
         try {
-            r = p.pending.get();
+            f = p.pending.get();
         } catch (Exception e) {
-            r = null;
+            f = null;
         }
         p.pending = null;
+        Route.Result r = f == null ? null : f.route();
         p.searchFailed = r == null || !r.hasRoute();
+        if (p.target != null) {
+            legFound(p, f);
+            return;
+        }
         if (r != null && r.hasRoute() && r.steps().size() < 2) {       // already there
-            if (p.target != null) {
-                String t = p.target.toShortString();
-                p.target = null;
-                halt(p, "arrived at " + t);
-                finished(p);
-            } else if (p.path != null) {
-                halt(p, p.doing);             // a follower already beside whom it follows
-            }
+            if (p.path != null) halt(p, p.doing);             // a follower already beside whom it follows
             return;
         }
         if (r == null || !r.hasRoute()) {
-            // A goto's search, over; a job's or a follower's, theirs to try again.
-            boolean going = p.target != null;
-            p.target = null;
+            // A job's or a follower's search: theirs to try again.
             halt(p, "no way: " + (r == null ? "the search failed" : r.reason()));
-            if (going) finished(p);
             return;
         }
+        walk(p, f);
+    }
+
+    /** A route found, walked: from its point nearest the body, with the steps its search allowed. */
+    private static void walk(Bot p, Leg.Found f) {
+        Route.Result r = f.route();
         p.path = r.steps();
         // The first point is where the body stood when the search began, and it may have
         // walked on while the search waited its turn: it joins the route where it is,
         // instead of turning back to its start.
         p.next = Math.min(nearest(p.path, p.body.position()) + 1, p.path.size() - 1);
-        p.partial = r.isPartial();
+        // A way out of a hole is a tower, which it climbs even with building off: that is
+        // the one exception (see Rescue).
+        p.walkBuilds = f.kind() == Leg.Kind.RESCUE || p.pendingOptions != null && p.pendingOptions.canBuild();
+        p.walkBreaks = p.pendingOptions != null && p.pendingOptions.canBreak();
         p.ticks = 0;
         p.jumps = 0;
-        p.lastPos = p.body.position();
+        p.lastNext = p.next;
+        p.lastGap = Double.MAX_VALUE;
+    }
+
+    /**
+     * A trip's leg came back from its search: walked; found to be there already, judged by
+     * the trip; with no way, searched again in a moment, or the trip over, said why (see
+     * {@link Trip#waitFor}).
+     */
+    private static void legFound(Bot p, Leg.Found f) {
+        Trip t = p.trip;
+        BotPlayer b = p.body;
+        if (f == null || !f.hasRoute()) {
+            String why = f == null ? "the search failed" : f.route().reason();
+            if (t.waitFor(b.getServer().getTickCount())) {
+                halt(p, "going to " + t.asked.toShortString() + ", searching again: " + why);
+                return;
+            }
+            if (t.legs == 0) {
+                endTrip(p, "no way: " + why);
+            } else {
+                // The search's words, and how the walk before it ended short, if it did.
+                t.why = t.why == null ? why : why + "; before that, " + t.why;
+                endTrip(p, t.shortWords(b.position(), "found no way on"));
+            }
+            return;
+        }
+        if (f.destination() != null && t.first()) {
+            t.destination = f.destination();
+            t.beside = f.kind() == Leg.Kind.BESIDE;
+        }
+        t.found();
+        if (f.kind() != Leg.Kind.WALK && f.kind() != Leg.Kind.BESIDE) {
+            LOG.info("[tachyon] {} at {}: {}", p.name(), Brain.pos(b.blockPosition()), f.route().reason());
+        }
+        if (f.route().steps().size() < 2) {
+            legOver(p, null);
+            return;
+        }
+        walk(p, f);
+    }
+
+    /**
+     * A leg's walk is over: its last point reached, or given up ({@code why}: stuck, out of
+     * time). Arrived, the trip is over; three legs in a row no closer, it gives up; else the
+     * next leg is searched from where it stands.
+     */
+    private static void legOver(Bot p, String why) {
+        Trip t = p.trip;
+        Vec3 at = p.body.position();
+        if (why != null) t.why = why;
+        if (t.arrived(at)) {
+            endTrip(p, t.arrivedWords(at));
+            return;
+        }
+        if (t.stalled(at)) {
+            endTrip(p, t.shortWords(at, "stuck"));
+            return;
+        }
+        halt(p, p.doing);
+        planLeg(p);
+    }
+
+    /** Its trip, over: it stands, saying how it went, and whoever sent it is told. */
+    private static void endTrip(Bot p, String how) {
+        p.target = null;
+        p.trip = null;
+        halt(p, how);
+        finished(p);
+    }
+
+    /** A trip whose last leg found no way, searched again once its moment is over (see {@link Trip#waitFor}). */
+    private static void retryLeg(Bot p, long now) {
+        Trip t = p.trip;
+        if (p.target == null || t == null || p.path != null || p.pending != null) return;
+        if (t.noLegSince < 0 || now < t.retryAt) return;
+        planLeg(p);
+    }
+
+    /**
+     * The walk cannot take its next step: a block it could not place or dig (none to build
+     * with, no permission, out of reach, a protected place). As when it is stuck: that tile
+     * vetoed, and the way searched again without it; {@code why} is kept for the trip's words.
+     */
+    static void blocked(Bot p, String why) {
+        if (p.path == null) return;
+        p.towerAt = null;
+        Tunnelling.abort(p);
+        replan(p, why);
+    }
+
+    /** A block placed on the way (a bridge, a tower): counted for the trip's words. */
+    static void placed(Bot p) {
+        if (p.target != null && p.trip != null) p.trip.placed++;
+    }
+
+    /** A block dug through on the way: counted for the trip's words. */
+    static void dug(Bot p) {
+        if (p.target != null && p.trip != null) p.trip.dug++;
     }
 
     /** It stops walking: keys released, a door it opened closed behind it. */
@@ -1627,6 +1845,8 @@ public final class Bots {
         if (p.pending != null) p.pending.cancel(true);
         p.pending = null;
         p.path = null;
+        p.towerAt = null;
+        Tunnelling.abort(p);
         release(p.body);
         closeOnStop(p);
         p.doing = doing;
@@ -1642,7 +1862,8 @@ public final class Bots {
     /**
      * One step along the route, as Masurium's client Walker takes it: look at the next point,
      * push forward, jump when it is higher, when something is in the way or in water, and
-     * move to the next one on standing on it.
+     * move to the next one on standing on it. A block the next point needs first (a bridge,
+     * a tower, one to dig through) is seen to before walking on.
      */
     private static void steer(Bot p) {
         BotPlayer b = p.body;
@@ -1654,27 +1875,18 @@ public final class Bots {
         boolean lastOne = p.next == p.path.size() - 1;
         Vec3 center = new Vec3(goal.x() + 0.5, goal.y(), goal.z() + 0.5);
         double missing = horizontal(b.position(), center);
+        long now = b.getServer().getTickCount();
 
         // Arriving is STANDING on the point, not flying past its height.
         boolean settled = b.onGround() || b.isInWater();
-        if (missing <= (lastOne ? NEAR_END : NEAR) && Math.abs(b.getY() - goal.y()) <= 0.5 && settled) {
+        if (missing <= (lastOne ? p.nearEnd : NEAR) && Math.abs(b.getY() - goal.y()) <= 0.5 && settled) {
             if (!lastOne) {
                 p.next++;
                 p.jumps = 0;
                 return;
             }
-            if (p.partial && p.target != null) {
-                // A stretch of the way: the rest is searched from here.
-                p.path = null;
-                release(b);
-                plan(p, p.target, "going to " + p.target.toShortString());
-                return;
-            }
             if (p.target != null) {
-                BlockPos t = p.target;
-                p.target = null;
-                halt(p, String.format(Locale.ROOT, "arrived at %s (%.1f from it)", t.toShortString(), missing));
-                finished(p);
+                legOver(p, null);          // the end of a leg: the trip says whether it is the end of it
             } else {
                 halt(p, p.following != null ? "following " + p.following.getGameProfile().getName() : "standing");
             }
@@ -1682,25 +1894,39 @@ public final class Bots {
         }
 
         if (++p.ticks > TICKS_MAX) {
-            boolean going = p.target != null;
-            p.target = null;
-            halt(p, "ran out of time at " + b.blockPosition().toShortString());
-            if (going) finished(p);
+            if (p.target != null) legOver(p, "a stretch of the way took more than " + TICKS_MAX / 20 + " s");
+            else halt(p, "ran out of time at " + b.blockPosition().toShortString());
             return;
         }
 
         if (p.ticks % STUCK_TICKS == 0) {
-            if (horizontal(b.position(), p.lastPos) < MIN_PROGRESS) {
-                if (++p.jumps > JUMPS_MAX && !replan(p)) return;
+            // Getting on is getting closer to the point it goes to, or on to the next one: a
+            // body pushed about in a crowd moves, and gets nowhere. Time spent on a block
+            // (placing, digging) is not being stuck; nor is pushing through a berry bush,
+            // where a body goes at a crawl and jumping does nothing.
+            double gap = Math.sqrt(missing * missing + (goal.y() - b.getY()) * (goal.y() - b.getY()));
+            boolean onward = p.next != p.lastNext || gap < p.lastGap - MIN_PROGRESS;
+            if (now - p.workedAt <= STUCK_TICKS || b.level().getBlockState(b.blockPosition()).is(Blocks.SWEET_BERRY_BUSH)) {
+                p.jumps = 0;
+            } else if (!onward) {
+                if (++p.jumps > JUMPS_MAX) {
+                    replan(p, "I got stuck at " + b.blockPosition().toShortString() + " and jumping did not get me on");
+                    return;
+                }
             } else {
                 p.jumps = 0;
             }
-            p.lastPos = b.position();
+            p.lastNext = p.next;
+            p.lastGap = gap;
         }
 
         closeIfDue(p);
         if (openIfNeeded(p, goal)) {
             release(b);
+            return;
+        }
+        if (p.walkBuilds && Scaffolding.step(p, goal) || p.walkBreaks && Tunnelling.step(p, goal)) {
+            p.workedAt = now;
             return;
         }
 
@@ -1719,40 +1945,85 @@ public final class Bots {
                 || (b.isInWater() && goal.y() >= floor));
     }
 
-    /** Stuck for real: another search, from here, a few times; then it gives up, saying where. */
-    private static boolean replan(Bot p) {
+    /**
+     * Stuck for real (six jumps without getting on), or blocked (a block it could not place
+     * or dig): the tile it could not get into is vetoed for a while ({@link StuckSpots}), the
+     * walk stops, and the way is searched again without that tile. A trip's, from here, a few
+     * times, with a short detour when there is no route from here; then the leg is over,
+     * judged by the trip. A follower's next look searches again; a job searches again.
+     */
+    private static void replan(Bot p, String why) {
+        BotPlayer b = p.body;
+        Route.Point at = p.path.get(p.next);
+        p.stuck.mark(b.level().dimension(), at.x(), at.y(), at.z(), b.getServer().getTickCount());
+        p.jumps = 0;
         if (p.following != null) {
+            halt(p, p.doing);
             p.plannedAt = -REPLAN_TICKS;       // the follower's next look searches again
             p.leaderX = Double.NaN;
-            p.jumps = 0;
-            return true;
+            return;
         }
-        if (p.target == null || ++p.replans > REPLANS_MAX) {
-            boolean going = p.target != null;
-            p.target = null;
-            halt(p, "stuck at " + p.body.blockPosition().toShortString());
-            if (going) finished(p);
-            return false;
+        if (p.target == null) {
+            halt(p, "stuck at " + b.blockPosition().toShortString() + ": " + why);
+            return;
         }
-        plan(p, p.target, "going to " + p.target.toShortString() + " (searching again: stuck)");
-        p.jumps = 0;
-        return true;
+        // A trip someone gave: a line in the log for each time (a follower's or a job's, a
+        // crowd's many, are not: the job says it in its words, a follower tries again).
+        LOG.info("[tachyon] {} at {}: {}; searching again without {} {} {}", p.name(), Brain.pos(b.blockPosition()), why,
+                at.x(), at.y(), at.z());
+        halt(p, p.doing);
+        Trip t = p.trip;
+        t.why = why;
+        t.afterStuck = true;
+        if (++p.replans > REPLANS_MAX) {
+            p.replans = 0;
+            legOver(p, why);
+            return;
+        }
+        planLeg(p);
     }
 
-    /** Only on flat ground with flat ground ahead, not on the last stretch, and if it may (its setting). */
+    /**
+     * Only on flat ground with flat ground ahead, not on the last stretch, and if it may (its
+     * setting); and not where a block is to be placed or dug: there control is worth more
+     * than speed.
+     */
     private static boolean canRun(Bot p, Route.Point goal) {
         if (!Settings.bool(p, Walking.SPRINT)) return false;
         if (goal.y() > floorY(p)) return false;
         if (p.next + 1 >= p.path.size()) return false;
-        return p.path.get(p.next + 1).y() == goal.y();
+        Route.Point after = p.path.get(p.next + 1);
+        if (after.y() != goal.y()) return false;
+        return !(p.walkBuilds || p.walkBreaks) || asItIs(p, goal) && asItIs(p, after);
+    }
+
+    /** A point walked onto as it is: a floor under it, nothing where the body goes. */
+    private static boolean asItIs(Bot p, Route.Point q) {
+        var level = p.body.level();
+        BlockPos feet = new BlockPos(q.x(), q.y(), q.z());
+        return !level.getBlockState(feet.below()).getCollisionShape(level, feet.below()).isEmpty()
+                && level.getBlockState(feet).getCollisionShape(level, feet).isEmpty()
+                && level.getBlockState(feet.above()).getCollisionShape(level, feet.above()).isEmpty();
     }
 
     /**
      * The tile the feet are on, which is not floor(y) on a partial block (a dirt path,
      * farmland, soul sand): the path finder counts the tile above it.
      */
-    private static int floorY(Bot p) {
-        BotPlayer b = p.body;
+    static int floorY(Bot p) {
+        return floorY(p.body);
+    }
+
+    /**
+     * The tile a body stands on: its block position, but on a partial block (a player on a
+     * dirt path, farmland) the tile above it, where the path finder has them stand. "Come
+     * here" to a player on a path asked for the path's own cell, a solid one.
+     */
+    static BlockPos standingOn(Entity e) {
+        return new BlockPos(e.getBlockX(), floorY(e), e.getBlockZ());
+    }
+
+    private static int floorY(Entity b) {
         int y = (int) Math.floor(b.getY());
         BlockPos at = BlockPos.containing(b.getX(), y, b.getZ());
         var box = b.level().getBlockState(at).getCollisionShape(b.level(), at);
