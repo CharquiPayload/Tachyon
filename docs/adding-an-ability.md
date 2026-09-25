@@ -196,7 +196,13 @@ A `Job` works a tick at a time (see `Job.java`):
   with a gap (its target gone, no route).
 
 `Job.hold(p, score)` puts the best item for something in the hand, from
-anywhere in the inventory; not while a reflex holds the hands.
+anywhere in the inventory; not while a reflex holds the hands. `Gear.weapon` is
+the score for hitting (a weapon before any tool, then damage per second), and
+`Gear.toHand(p, slot)` brings one slot's item into the hand: selected in the
+hotbar, or brought up from the backpack into the hotbar slot Masurium's rule
+gives up (the weakest weapon for a better one, else an empty slot, else the one
+in hand). `Gear` has the rest of what a bot carries: an item's id in words and
+back (`Gear.id`, `Gear.item`), counts, whether something fits.
 
 `Bots.plan(p, to, goal, options, doing)` searches with options of its own
 (`Route.Options`: a longer fall, building, breaking); the other `plan`s use
@@ -224,9 +230,13 @@ public void tools(Tools tools) {
 
 `Tool.Call` has the bot (`call.bot()`), what the model gave (`call.args()`, a
 `JsonObject`), who spoke (`call.speaker()`, a `ServerPlayer`, null for the
-console or someone gone), their name (`call.speakerName()`), and the order for
-what the tool starts (`call.order()`): pass it on to the `order...` method, and
-whoever spoke is told how it went when it is over, in the bot's words.
+console or someone gone), their name (`call.speakerName()`), what they said this
+turn (`call.words()`: null when nobody spoke, in a turn for news or a notice,
+where the speaker is only whom the bot answers), and the order for what the tool
+starts (`call.order()`): pass it on to the `order...` method, and whoever spoke
+is told how it went when it is over, in the bot's words. A tool that may do
+something only because a person asked (eat a banned food) looks at
+`call.words()`: its brain alone, or a notice, did not ask.
 
 What the handler returns is words for the model, and the model believes them:
 
@@ -265,8 +275,8 @@ More a tool may have, set as it is made:
 The tools are sent to the model in `Abilities`' order. A tool changes what the
 model is sent, and so how every bot behaves: its name and description are
 behaviour, as much as its handler. `ToolsTest` holds the eight core tools to
-the byte (`core-tools.json`: those of 0.1.0, with hunt's `mob` mended); new tools
-come among them without touching them.
+the byte (`core-tools.json`: those of 0.1.0, with hunt's `mob` mended and hunt
+made Masurium's since); new tools come among them without touching them.
 
 ## The brain
 
@@ -373,6 +383,25 @@ takes what it needs, for a while:
   swaps nothing) while its walk goes on. `Bots.freeHands(p, this)` to let go
   sooner. The reflex puts what it needs in the hand with `Job.wield`. For
   longer than a few seconds, take the body.
+
+A body that uses an item (a bite, a bow drawn) walks at a fifth of its pace and
+cannot sprint, as a player's client makes it (`BotPlayer.tick`). An item's use is
+the server's own: `body.gameMode.useItem(...)` starts it and the game runs it,
+tick by tick, until it is over or what is in the hand changes; nothing on the
+server ever lets a use go by itself, so whatever starts one (a bow drawn) stops
+it (`body.stopUsingItem()`) on every way out. What there is to build on:
+
+- **Eating**: `Eating.eatBest(p, this)` starts the best food the bot may eat on
+  its own (never banned or harmful food), its hands held by the caller for the
+  bite; it returns null once it is eating, else why not in words.
+  `Eating.eating(p)` says whether a bite is under way. A reflex that eats when
+  hungry decides when; this decides what, and does it as a player would.
+- **The bow**: `Bow.step(p, target)` one tick of a draw at a target (into the
+  hand, aimed where the arrow will meet it, drawn, let go when full and the shot
+  is clear); `Bow.stop(p)` lets a draw down; `Bow.Misses` is the shared memory of
+  targets not worth another arrow.
+- **Trash**: `Tossing.tossTrash(p)` tosses its trash but one stack of each block
+  it builds with.
 
 **Nothing that sends a bot away, or brings one in, runs inside a tick**: not
 from a reflex, not from a hook. `server.execute(...)` does NOT wait there: on

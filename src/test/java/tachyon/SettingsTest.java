@@ -433,7 +433,7 @@ class SettingsTest {
         Set<String> declared = new HashSet<>();
         for (Settings.Setting s : mod.all()) declared.add(s.key);
         assertEquals(declared, inReadme, "every setting the mod declares has its row in the README, and no other");
-        assertEquals(List.of("Walking", "Life", "Night"), List.copyOf(mod.groups(Settings.Level.BASIC).keySet()));
-        assertEquals(List.of("Brain"), List.copyOf(mod.groups(Settings.Level.ADVANCED).keySet()));
+        assertEquals(List.of("Walking", "Life", "Night", "Gear"), List.copyOf(mod.groups(Settings.Level.BASIC).keySet()));
+        assertEquals(List.of("Brain", "Fighting", "Gear"), List.copyOf(mod.groups(Settings.Level.ADVANCED).keySet()));
     }
 }
